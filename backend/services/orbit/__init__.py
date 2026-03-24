@@ -1,10 +1,12 @@
 """
 Orbit service — two-body orbital propagation.
 
-Public API:
-    from services.orbit import propagate_orbit
+Public API::
+
+    from services.orbit import propagate_orbit, StateVector, PropagationResult
 """
 
 from services.orbit.propagator import propagate_orbit
+from services.orbit.state import PropagationResult, StateVector
 
-__all__ = ["propagate_orbit"]
+__all__ = ["propagate_orbit", "StateVector", "PropagationResult"]

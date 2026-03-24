@@ -20,10 +20,14 @@ This module exposes:
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 from numpy.typing import NDArray
 
-from core.constants import MU_EARTH
+from core.constants import MU_EARTH, R_EARTH
+
+logger = logging.getLogger(__name__)
 
 
 def two_body_acceleration(
@@ -35,8 +39,8 @@ def two_body_acceleration(
     Parameters
     ----------
     position : (3,) array
-        Cartesian position vector [x, y, z] in metres, measured from the
-        centre of the primary body.
+        Cartesian position vector [x, y, z] in **metres**, measured from
+        the centre of the primary body.
     mu : float, optional
         Gravitational parameter of the primary body [m³ s⁻²].
         Defaults to Earth's μ.
@@ -50,7 +54,7 @@ def two_body_acceleration(
     ------
     ValueError
         If the position vector has zero magnitude (singularity at the
-        centre of the primary body).
+        centre of the primary body), or contains NaN / Inf.
 
     Notes
     -----
@@ -58,12 +62,30 @@ def two_body_acceleration(
     but avoids a separate unit-vector computation.
     """
     r = np.asarray(position, dtype=np.float64)
+
+    # ── Finite check ────────────────────────────────────────────────
+    if not np.all(np.isfinite(r)):
+        raise ValueError(
+            f"Position vector contains non-finite values: {r}. "
+            "This may indicate numerical divergence in the integrator."
+        )
+
     r_mag = np.linalg.norm(r)
 
+    # ── Zero-magnitude singularity ──────────────────────────────────
     if r_mag == 0.0:
         raise ValueError(
             "Position vector has zero magnitude; gravitational acceleration "
             "is undefined at the centre of the primary body."
+        )
+
+    # ── Sub-surface warning (inside Earth) ──────────────────────────
+    if r_mag < R_EARTH:
+        logger.warning(
+            "Position magnitude %.2f m is below Earth's radius (%.0f m). "
+            "The satellite is inside the Earth — results are non-physical.",
+            r_mag,
+            R_EARTH,
         )
 
     return -mu * r / r_mag**3

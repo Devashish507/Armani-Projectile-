@@ -13,3 +13,11 @@ MU_EARTH: float = 3.986004418e14
 
 # Mean volumetric radius  [m]
 R_EARTH: float = 6.371e6
+
+# ── Reference Epochs ────────────────────────────────────────────────
+# J2000.0 epoch — the standard astronomical reference
+J2000_EPOCH_ISO: str = "2000-01-01T12:00:00Z"
+
+# ── Supported ODE Solvers ───────────────────────────────────────────
+# Subset of scipy.integrate.solve_ivp methods suitable for orbital mechanics
+SUPPORTED_METHODS: tuple[str, ...] = ("RK45", "RK23", "DOP853", "Radau", "BDF", "LSODA")

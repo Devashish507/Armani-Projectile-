@@ -3,6 +3,8 @@ Utility helpers for orbital mechanics calculations.
 
 These are thin, reusable functions that operate on NumPy arrays and return
 scalar or array quantities commonly needed in orbit analysis.
+
+All functions expect **SI units** (metres, m/s, m³ s⁻²).
 """
 
 from __future__ import annotations
@@ -87,3 +89,68 @@ def specific_orbital_energy(
     r = vector_magnitude(position)
     v = vector_magnitude(velocity)
     return 0.5 * v**2 - mu / r
+
+
+def escape_velocity(position: NDArray[np.float64], mu: float = MU_EARTH) -> float:
+    """Compute the local escape velocity at a given position.
+
+    The escape velocity is the minimum speed required for an object to
+    escape the gravitational influence of the primary body:
+
+        v_esc = √(2μ / r)
+
+    Parameters
+    ----------
+    position : (3,) array
+        Cartesian position vector [m].
+    mu : float, optional
+        Gravitational parameter [m³ s⁻²].
+
+    Returns
+    -------
+    float
+        Escape velocity [m/s].
+    """
+    r = vector_magnitude(position)
+    return float(np.sqrt(2.0 * mu / r))
+
+
+def circular_velocity(position: NDArray[np.float64], mu: float = MU_EARTH) -> float:
+    """Compute the circular orbital velocity at a given radius.
+
+    For a circular orbit:  v_circ = √(μ / r)
+
+    Parameters
+    ----------
+    position : (3,) array
+        Cartesian position vector [m].
+    mu : float, optional
+        Gravitational parameter [m³ s⁻²].
+
+    Returns
+    -------
+    float
+        Circular velocity [m/s].
+    """
+    r = vector_magnitude(position)
+    return float(np.sqrt(mu / r))
+
+
+def orbital_period(radius: float, mu: float = MU_EARTH) -> float:
+    """Compute the Keplerian orbital period for a circular orbit.
+
+    T = 2π √(r³ / μ)
+
+    Parameters
+    ----------
+    radius : float
+        Orbital radius [m].
+    mu : float, optional
+        Gravitational parameter [m³ s⁻²].
+
+    Returns
+    -------
+    float
+        Orbital period [s].
+    """
+    return 2.0 * np.pi * np.sqrt(radius**3 / mu)
