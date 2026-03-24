@@ -59,3 +59,7 @@ Open [http://localhost:3000](http://localhost:3000). The status indicator connec
 - **CORS** — configured via `CORS_ORIGINS` env var; defaults to `http://localhost:3000`.
 - **Typed API client** — `lib/api.ts` wraps `fetch` with generics and error handling.
 - **Dark-first UI** — aerospace-themed dark palette with shadcn/ui components.
+
+
+Initialize - 23-03-2026
+Story 1 - 24-03-2026
