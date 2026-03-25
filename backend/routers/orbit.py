@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 
 import numpy as np
 from fastapi import APIRouter, HTTPException
@@ -29,6 +30,26 @@ router = APIRouter(
 )
 
 
+def _downsample(
+    time: np.ndarray,
+    position: np.ndarray,
+    velocity: np.ndarray,
+    max_points: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Uniformly downsample trajectory arrays to at most *max_points*.
+
+    Selects evenly-spaced indices so the overall trajectory shape is
+    preserved — critical for accurate 3D rendering on the frontend.
+    The first and last points are always included.
+    """
+    n = len(time)
+    if n <= max_points:
+        return time, position, velocity
+
+    indices = np.round(np.linspace(0, n - 1, max_points)).astype(int)
+    return time[indices], position[indices], velocity[indices]
+
+
 @router.post(
     "/simulate",
     response_model=OrbitResponse,
@@ -42,17 +63,25 @@ async def simulate_orbit(request: OrbitRequest) -> OrbitResponse:
     m/s) and returns the propagated trajectory evaluated on a uniform time
     grid.
 
-    The heavy numerical integration is offloaded to a thread so this
-    coroutine does not block the event loop.
+    **Downsampling** — when ``max_points`` is set (default 500), the output
+    is uniformly reduced for efficient 3D rendering.  Set to ``null`` to
+    return the full-resolution result.
+
+    **Metadata** — pass ``include_metadata: false`` to omit solver
+    diagnostics from the response and save bandwidth.
+
+    Each response includes a unique ``simulation_id`` (UUID4) for future
+    caching, mission-saving, and result retrieval workflows.
 
     Raises
     ------
     HTTPException 400
-        If the initial conditions fail physical-plausibility checks
-        (e.g. position below Earth's surface, velocity unreasonably high).
+        If the initial conditions fail physical-plausibility checks.
     HTTPException 500
         If the ODE solver fails to converge or an unexpected error occurs.
     """
+    simulation_id = str(uuid.uuid4())
+
     try:
         # Convert lists → NumPy arrays
         r0 = np.array(request.initial_position, dtype=np.float64)
@@ -67,17 +96,33 @@ async def simulate_orbit(request: OrbitRequest) -> OrbitResponse:
             time_step=request.time_step,
         )
 
-        # Serialise NumPy arrays → plain Python lists
-        return OrbitResponse(
-            time=result.time.tolist(),
-            position=result.position.tolist(),
-            velocity=result.velocity.tolist(),
-            metadata=SimulationMetadata(
+        # ── Downsample for UI performance ───────────────────────────
+        time_out = result.time
+        pos_out = result.position
+        vel_out = result.velocity
+
+        if request.max_points is not None:
+            time_out, pos_out, vel_out = _downsample(
+                time_out, pos_out, vel_out, request.max_points,
+            )
+
+        # ── Build optional metadata ─────────────────────────────────
+        metadata = None
+        if request.include_metadata:
+            metadata = SimulationMetadata(
                 method=result.method,
                 energy_drift_pct=result.energy_drift_pct,
                 solver_evaluations=result.solver_evaluations,
                 n_steps=result.n_steps,
-            ),
+            )
+
+        # ── Serialise NumPy → plain Python ──────────────────────────
+        return OrbitResponse(
+            simulation_id=simulation_id,
+            time=time_out.tolist(),
+            position=pos_out.tolist(),
+            velocity=vel_out.tolist(),
+            metadata=metadata,
         )
 
     except ValueError as exc:
@@ -94,3 +139,4 @@ async def simulate_orbit(request: OrbitRequest) -> OrbitResponse:
             status_code=500,
             detail="An internal error occurred during simulation.",
         ) from exc
+

@@ -9,6 +9,8 @@ any expensive computation begins.
 
 from __future__ import annotations
 
+from typing import Optional
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
@@ -30,6 +32,15 @@ class OrbitRequest(BaseModel):
         Total simulation duration in seconds.  Must be > 0.
     time_step : float
         Output sample interval in seconds.  Must be > 0 and ≤ time_span.
+    max_points : int | None
+        Maximum number of trajectory points returned to the client.
+        When the raw simulation produces more points than this limit,
+        the output is uniformly downsampled.  Essential for 3D rendering
+        performance.  Defaults to 500; set to ``None`` to disable.
+    include_metadata : bool
+        If ``True`` (default), the response includes solver diagnostics
+        (method, energy drift, evaluations).  Set to ``False`` to skip
+        the metadata envelope when it is not needed.
     """
 
     initial_position: list[float] = Field(
@@ -53,6 +64,17 @@ class OrbitRequest(BaseModel):
         gt=0,
         description="Output time step in seconds",
         examples=[10],
+    )
+    max_points: Optional[int] = Field(
+        default=500,
+        gt=0,
+        description="Max trajectory points returned (uniform downsample). "
+                    "Set to null to disable downsampling.",
+        examples=[500],
+    )
+    include_metadata: bool = Field(
+        default=True,
+        description="Include solver diagnostics in the response",
     )
 
     # ── Element-count validators ────────────────────────────────────
@@ -110,16 +132,22 @@ class OrbitResponse(BaseModel):
 
     Attributes
     ----------
+    simulation_id : str
+        Unique identifier for this simulation run (UUID4).  Useful for
+        caching results and saving missions.
     time : list[float]
         Epoch values in seconds from simulation start.
     position : list[list[float]]
         Position vectors [m] at each epoch — shape (N, 3).
     velocity : list[list[float]]
         Velocity vectors [m/s] at each epoch — shape (N, 3).
-    metadata : SimulationMetadata
-        Solver diagnostics (method, energy drift, evaluations, step count).
+    metadata : SimulationMetadata | None
+        Solver diagnostics.  ``None`` when ``include_metadata=false``.
     """
 
+    simulation_id: str = Field(
+        ..., description="Unique simulation run identifier (UUID4)"
+    )
     time: list[float] = Field(..., description="Time stamps [s]")
     position: list[list[float]] = Field(
         ..., description="Position vectors [m] — (N, 3)"
@@ -127,4 +155,7 @@ class OrbitResponse(BaseModel):
     velocity: list[list[float]] = Field(
         ..., description="Velocity vectors [m/s] — (N, 3)"
     )
-    metadata: SimulationMetadata
+    metadata: Optional[SimulationMetadata] = Field(
+        default=None,
+        description="Solver diagnostics (omitted when include_metadata=false)",
+    )
