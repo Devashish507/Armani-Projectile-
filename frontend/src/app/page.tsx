@@ -19,7 +19,14 @@ import {
  * ──────────────────────────────────────────────────────────────── */
 const SpaceScene = dynamic(
   () => import("@/components/scene/SpaceScene"),
-  { ssr: false }
+  {
+    ssr: false,
+    loading: () => (
+      <div className="absolute inset-0 flex items-center justify-center bg-black text-white/60 text-sm">
+        Loading space…
+      </div>
+    ),
+  }
 );
 
 type ConnectionStatus = "checking" | "online" | "offline";
@@ -59,6 +66,15 @@ export default function HomePage() {
     <main className="relative w-screen h-screen overflow-hidden">
       {/* ── 3D Background ──────────────────────────────────── */}
       <SpaceScene />
+
+      {/* ── Vignette gradient for text readability over bright Earth */}
+      <div
+        className="absolute inset-0 z-[5] pointer-events-none"
+        style={{
+          background:
+            "radial-gradient(ellipse at center, transparent 30%, rgba(0,0,0,0.55) 100%)",
+        }}
+      />
 
       {/* ── Overlay UI ─────────────────────────────────────── */}
       <div className="absolute inset-0 pointer-events-none z-10 flex flex-col items-center justify-center gap-10 p-6">

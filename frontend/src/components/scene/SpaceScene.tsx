@@ -3,46 +3,43 @@
 import { Suspense } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Stars, Preload } from "@react-three/drei";
+import { ACESFilmicToneMapping } from "three";
 import Earth from "./Earth";
 import CameraController from "./CameraController";
 
 /* ────────────────────────────────────────────────────────────────
- * SpaceScene — the root 3D container for the mission-control UI.
+ * SpaceScene — root 3D container for mission-control.
  *
- * Responsibilities:
- *   1. Initialise an R3F <Canvas> that fills its parent container.
- *   2. Set up a perspective camera aimed at the origin.
- *   3. Provide scene-level lighting (ambient + directional "sun").
- *   4. Render the Earth and starfield background.
- *   5. Attach orbit camera controls.
+ * Visual upgrades in this version:
+ *   • ACES filmic tone mapping for cinematic contrast
+ *   • Physically tuned lighting — very low ambient (0.05) plus
+ *     a strong directional "sun" for a crisp day/night split
+ *   • Camera starts at z=8 (far) for the intro zoom animation
+ *   • Stars tuned with factor=4 for depth parallax
  *
  * Extension points:
- *   • Drop satellite meshes as children inside the <Canvas>.
- *   • Add orbit path lines alongside <Earth>.
- *   • Swap in a more detailed lighting rig when postprocessing
- *     is enabled later.
- *
- * Performance notes:
- *   • <Suspense> boundaries let textures stream without blocking.
- *   • <Preload all /> eagerly fetches assets on mount.
- *   • dpr is capped at 2 to balance quality vs. GPU load.
- *   • gl.antialias is on for smooth sphere edges.
+ *   • Satellite meshes as children inside <Canvas>
+ *   • Orbit path lines alongside <Earth>
  * ──────────────────────────────────────────────────────────────── */
 
 export default function SpaceScene() {
   return (
     <Canvas
-      /* Camera starts pulled back on the Z-axis looking at the origin */
+      /* Camera starts far out — CameraController will lerp it in */
       camera={{
-        position: [0, 0, 3.5],
-        fov: 50,
+        position: [0, 0, 8],
+        fov: 55,
         near: 0.1,
         far: 1000,
       }}
-      /* Cap pixel ratio to 2× — retina quality without burning the GPU */
+      /* Cap pixel ratio to 2× — retina quality without GPU strain */
       dpr={[1, 2]}
-      /* Transparent lets the CSS background show during load */
-      gl={{ antialias: true, alpha: true }}
+      gl={{
+        antialias: true,
+        alpha: true,
+        toneMapping: ACESFilmicToneMapping,
+        toneMappingExposure: 1.0,
+      }}
       style={{
         width: "100%",
         height: "100%",
@@ -52,27 +49,28 @@ export default function SpaceScene() {
       }}
     >
       {/* ── Lighting ────────────────────────────────────────── */}
-      {/* Low ambient fill so the dark side isn't pure black */}
-      <ambientLight intensity={0.15} />
-      {/* Directional "sun" — positioned to the upper-right */}
-      <directionalLight position={[5, 3, 5]} intensity={1.8} />
+      {/* Very low ambient — lets the dark side stay dark so
+          emissive city-lights can shine through.              */}
+      <ambientLight intensity={0.05} />
+      {/* Strong directional "sun" for a clean day/night split */}
+      <directionalLight position={[5, 2, 2]} intensity={2} />
 
       {/* ── Scene content ───────────────────────────────────── */}
       <Suspense fallback={null}>
         <Earth />
-        {/* Star field — renders as points on a large sphere */}
+        {/* Star field — tuned for depth parallax */}
         <Stars
           radius={100}
           depth={60}
           count={4000}
-          factor={5}
+          factor={4}
           saturation={0}
           fade
           speed={0.5}
         />
       </Suspense>
 
-      {/* ── Controls ────────────────────────────────────────── */}
+      {/* ── Controls + intro animation ──────────────────────── */}
       <CameraController />
 
       {/* Eagerly preload all drei assets (textures, etc.) */}
