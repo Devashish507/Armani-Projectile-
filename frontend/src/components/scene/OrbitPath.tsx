@@ -1,93 +1,121 @@
 "use client";
 
-import { useMemo, useRef } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useMemo } from "react";
+import { useThree } from "@react-three/fiber";
+import { Line } from "@react-three/drei";
 import * as THREE from "three";
 
 /* ────────────────────────────────────────────────────────────────
- * OrbitPath — renders a satellite trajectory as a glowing line.
+ * OrbitPath — renders a satellite trajectory using Drei's Line2.
  *
- * Uses imperative THREE.Line objects attached via <primitive> to
- * avoid R3F/TypeScript JSX issues with the <line> element.
- *
- * Two overlapping lines create the glow effect:
- *   1. Bright inner line  — the sharp trajectory
- *   2. Wider transparent outer line — the soft glow halo
- *
- * Geometry is memoised so it is only rebuilt when positions change.
+ * Visual upgrades:
+ *   • Fat lines (Line2) — screen-space thickness that stays
+ *     visible at any zoom level
+ *   • Motion trail — vertex-color gradient that brightens near
+ *     the satellite and fades in the "wake" region
+ *   • Earth-shadow dimming — points behind Earth get darker
+ *   • Dual-layer glow — bright core + transparent halo
  * ──────────────────────────────────────────────────────────────── */
 
 interface OrbitPathProps {
   /** Trajectory points in world units — array of [x, y, z]. */
   positions: [number, number, number][];
+  /** Current animation index (for motion trail). */
+  currentIndex: number;
   /** Line colour (CSS / hex string). @default "#00e5ff" (cyan) */
   color?: string;
-  /** Opacity of the core line. @default 0.9 */
-  opacity?: number;
   /** Whether the path is visible. @default true */
   visible?: boolean;
 }
 
+/** Convert a hex colour string to [r, g, b] normalised floats. */
+function hexToRgb(hex: string): [number, number, number] {
+  const c = new THREE.Color(hex);
+  return [c.r, c.g, c.b];
+}
+
 export default function OrbitPath({
   positions,
+  currentIndex,
   color = "#00e5ff",
-  opacity = 0.9,
   visible = true,
 }: OrbitPathProps) {
-  const coreRef = useRef<THREE.Line>(null);
-  const glowRef = useRef<THREE.Line>(null);
+  const { camera } = useThree();
 
-  // ── Build geometry once and reuse until positions change ───
-  const geometry = useMemo(() => {
-    if (positions.length === 0) return new THREE.BufferGeometry();
+  // ── Memoised points for Line2 ──────────────────────────────
+  const points = useMemo(
+    () => positions.map(([x, y, z]) => new THREE.Vector3(x, y, z)),
+    [positions],
+  );
 
-    const flat = new Float32Array(positions.length * 3);
-    for (let i = 0; i < positions.length; i++) {
-      flat[i * 3] = positions[i][0];
-      flat[i * 3 + 1] = positions[i][1];
-      flat[i * 3 + 2] = positions[i][2];
+  const baseRgb = useMemo(() => hexToRgb(color), [color]);
+
+  // ── Compute vertex colours with motion trail + Earth shadow ─
+  const vertexColors = useMemo(() => {
+    const n = positions.length;
+    if (n === 0) return [];
+
+    const camDir = new THREE.Vector3()
+      .copy(camera.position)
+      .normalize();
+
+    const colors: [number, number, number][] = [];
+
+    for (let i = 0; i < n; i++) {
+      // Wrap-aware distance from satellite
+      let dist = currentIndex - i;
+      if (dist < 0) dist += n;
+
+      // Trail: bright near satellite → fades behind
+      const trailLength = n * 0.7;
+      let brightness: number;
+      if (dist <= trailLength) {
+        brightness = 1.0 - (dist / trailLength) * 0.75;
+      } else {
+        brightness = 0.15;
+      }
+
+      // Earth-shadow: dim points on the far side from camera
+      const pos = positions[i];
+      const ptDir = new THREE.Vector3(pos[0], pos[1], pos[2]).normalize();
+      const dot = camDir.dot(ptDir);
+      if (dot < -0.1) {
+        brightness *= Math.max(0.2, 1.0 + dot);
+      }
+
+      colors.push([
+        baseRgb[0] * brightness,
+        baseRgb[1] * brightness,
+        baseRgb[2] * brightness,
+      ]);
     }
 
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(flat, 3));
-    return geo;
-  }, [positions]);
+    return colors;
+  }, [positions, currentIndex, baseRgb, camera.position]);
 
-  // ── Imperative Line objects (avoids JSX <line> type issues) ─
-  const coreLine = useMemo(() => {
-    const mat = new THREE.LineBasicMaterial({
-      color,
-      transparent: true,
-      opacity,
-      depthWrite: false,
-    });
-    return new THREE.Line(geometry, mat);
-  }, [geometry, color, opacity]);
-
-  const glowLine = useMemo(() => {
-    const mat = new THREE.LineBasicMaterial({
-      color,
-      transparent: true,
-      opacity: opacity * 0.25,
-      depthWrite: false,
-    });
-    return new THREE.Line(geometry, mat);
-  }, [geometry, color, opacity]);
-
-  // ── Keep refs synced (for potential future interaction) ─────
-  useFrame(() => {
-    if (coreRef.current) coreRef.current.visible = visible;
-    if (glowRef.current) glowRef.current.visible = visible;
-  });
-
-  if (positions.length < 2) return null;
+  if (positions.length < 2 || vertexColors.length === 0) return null;
 
   return (
-    <group>
-      {/* Glow halo (rendered first so it sits behind) */}
-      <primitive ref={glowRef} object={glowLine} />
-      {/* Core trajectory line */}
-      <primitive ref={coreRef} object={coreLine} />
+    <group visible={visible}>
+      {/* Glow halo — wider, transparent */}
+      <Line
+        points={points}
+        vertexColors={vertexColors}
+        lineWidth={5}
+        transparent
+        opacity={0.15}
+        depthWrite={false}
+      />
+
+      {/* Core trajectory — bright, sharp */}
+      <Line
+        points={points}
+        vertexColors={vertexColors}
+        lineWidth={2}
+        transparent
+        opacity={0.9}
+        depthWrite={false}
+      />
     </group>
   );
 }

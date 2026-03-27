@@ -61,4 +61,32 @@ export interface ScaledTrajectory {
   times: number[];
   /** Positions in world units (Earth radius = 1). */
   positions: [number, number, number][];
+  /** Velocities in world units/s (optional, for telemetry). */
+  velocities?: [number, number, number][];
+}
+
+// ── Playback controls ──────────────────────────────────────────────
+
+export interface OrbitPlaybackState {
+  /** Whether animation is paused. */
+  paused: boolean;
+  /** Playback speed multiplier (1× = real-time, 50× = fast). */
+  speed: number;
+  /** Whether camera follows the satellite. */
+  followCamera: boolean;
+}
+
+// ── Live telemetry ─────────────────────────────────────────────────
+
+export interface OrbitalParameters {
+  /** Altitude above Earth surface in km. */
+  altitudeKm: number;
+  /** Velocity magnitude in km/s. */
+  velocityKmS: number;
+  /** Orbital inclination in degrees. */
+  inclinationDeg: number;
+  /** Orbital period in minutes. */
+  periodMin: number;
+  /** 0→1 progress through current orbit. */
+  progress: number;
 }

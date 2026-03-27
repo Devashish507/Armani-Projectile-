@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState, useCallback } from "react";
+import { Suspense, useEffect, useState, useCallback, useRef } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Stars, Preload } from "@react-three/drei";
 import { ACESFilmicToneMapping } from "three";
@@ -8,38 +8,37 @@ import Earth from "./Earth";
 import CameraController from "./CameraController";
 import OrbitPath from "./OrbitPath";
 import Satellite from "./Satellite";
+import OrbitPlane from "./OrbitPlane";
 import { useOrbitAnimation } from "./useOrbitAnimation";
 import { fetchOrbitSimulation } from "@/lib/api";
 import {
   SCALE_FACTOR,
   type OrbitSimulationResponse,
   type ScaledTrajectory,
+  type OrbitPlaybackState,
+  type OrbitalParameters,
 } from "@/types/orbit";
 
 /* ────────────────────────────────────────────────────────────────
- * Mock orbit data — a circular LEO orbit (~400 km altitude).
- *
- * Used as a fallback when the backend is not running, so the
- * visualisation always shows _something_ useful during development.
+ * Mock orbit data — ISS-like circular LEO orbit (~400 km alt).
  * ──────────────────────────────────────────────────────────────── */
 
 function generateMockOrbit(
-  numPoints: number = 360,
+  numPoints: number = 500,
   altitudeKm: number = 400,
-  inclinationDeg: number = 51.6,   // ISS-like inclination
+  inclinationDeg: number = 51.6,
 ): ScaledTrajectory {
-  const radiusWorld = 1 + altitudeKm / 6371;           // Earth radius = 1
+  const radiusWorld = 1 + altitudeKm / 6371;
   const inclination = (inclinationDeg * Math.PI) / 180;
-  const period = 5400;                                  // ~90 min in seconds
+  const period = 5400; // ~90 min
 
   const times: number[] = [];
   const positions: [number, number, number][] = [];
 
-  for (let i = 0; i <= numPoints; i++) {
+  for (let i = 0; i < numPoints; i++) {
     const t = (i / numPoints) * period;
     const angle = (i / numPoints) * Math.PI * 2;
 
-    // Orbit in the XZ plane, then rotate by inclination about X
     const x = radiusWorld * Math.cos(angle);
     const y = radiusWorld * Math.sin(angle) * Math.sin(inclination);
     const z = radiusWorld * Math.sin(angle) * Math.cos(inclination);
@@ -52,7 +51,7 @@ function generateMockOrbit(
 }
 
 /* ────────────────────────────────────────────────────────────────
- * scaleTrajectory — convert backend SI-unit response to world units.
+ * Convert backend SI-unit response to scene world units.
  * ──────────────────────────────────────────────────────────────── */
 
 function scaleTrajectory(data: OrbitSimulationResponse): ScaledTrajectory {
@@ -62,53 +61,56 @@ function scaleTrajectory(data: OrbitSimulationResponse): ScaledTrajectory {
       ([x, y, z]) =>
         [x / SCALE_FACTOR, y / SCALE_FACTOR, z / SCALE_FACTOR] as [number, number, number],
     ),
+    velocities: data.velocity.map(
+      ([vx, vy, vz]) =>
+        [vx / SCALE_FACTOR, vy / SCALE_FACTOR, vz / SCALE_FACTOR] as [number, number, number],
+    ),
   };
 }
 
 /* ────────────────────────────────────────────────────────────────
- * OrbitLayer — fetches (or mocks) orbit data, then renders the
- * orbit path and animated satellite.
- *
- * This component lives INSIDE <Canvas> so it can use R3F hooks
- * (useFrame via the animation hook).  It is designed for easy
- * extension to multiple satellites — just render multiple
- * <OrbitLayer /> instances with different initial conditions.
+ * OrbitLayer — fetches orbit data, then renders orbit path,
+ * animated satellite, and orbital plane indicator.
  * ──────────────────────────────────────────────────────────────── */
 
 interface OrbitLayerProps {
   /** Override trajectory instead of fetching from API. */
   trajectory?: ScaledTrajectory;
-  /** Animation speed multiplier. @default 50 */
-  animationSpeed?: number;
+  /** Playback state from the HUD. */
+  playback: OrbitPlaybackState;
+  /** Callback to push telemetry to the HUD. */
+  onTelemetryUpdate?: (params: OrbitalParameters) => void;
+  /** Callback to push satellite position (for camera follow). */
+  onPositionUpdate?: (pos: [number, number, number]) => void;
   /** Orbit line colour. @default "#00e5ff" */
   orbitColor?: string;
 }
 
 function OrbitLayer({
   trajectory: externalTrajectory,
-  animationSpeed = 50,
+  playback,
+  onTelemetryUpdate,
+  onPositionUpdate,
   orbitColor = "#00e5ff",
 }: OrbitLayerProps) {
   const [trajectory, setTrajectory] = useState<ScaledTrajectory | null>(
     externalTrajectory ?? null,
   );
 
-  // ── Fetch orbit data from backend (falls back to mock) ────
   const loadOrbit = useCallback(async () => {
-    if (externalTrajectory) return; // already provided externally
+    if (externalTrajectory) return;
 
     try {
       const response = await fetchOrbitSimulation({
-        initial_position: [7_000_000, 0, 0],       // ~630 km altitude
-        initial_velocity: [0, 7546, 0],             // circular velocity
-        time_span: 5400,                            // ~1 orbit period
+        initial_position: [7_000_000, 0, 0],
+        initial_velocity: [0, 7546, 0],
+        time_span: 5400,
         time_step: 10,
         max_points: 500,
         include_metadata: false,
       });
       setTrajectory(scaleTrajectory(response));
     } catch {
-      // Backend unavailable — use mock data for development
       console.warn("[OrbitLayer] Backend unavailable, using mock orbit data.");
       setTrajectory(generateMockOrbit());
     }
@@ -123,39 +125,72 @@ function OrbitLayer({
   return (
     <AnimatedOrbit
       trajectory={trajectory}
-      animationSpeed={animationSpeed}
+      playback={playback}
       orbitColor={orbitColor}
+      onTelemetryUpdate={onTelemetryUpdate}
+      onPositionUpdate={onPositionUpdate}
     />
   );
 }
 
 /* ────────────────────────────────────────────────────────────────
  * AnimatedOrbit — separated so the animation hook has guaranteed
- * access to a valid trajectory (avoids conditional hook calls).
+ * access to a valid trajectory (no conditional hooks).
  * ──────────────────────────────────────────────────────────────── */
 
 interface AnimatedOrbitProps {
   trajectory: ScaledTrajectory;
-  animationSpeed: number;
+  playback: OrbitPlaybackState;
   orbitColor: string;
+  onTelemetryUpdate?: (params: OrbitalParameters) => void;
+  onPositionUpdate?: (pos: [number, number, number]) => void;
 }
 
 function AnimatedOrbit({
   trajectory,
-  animationSpeed,
+  playback,
   orbitColor,
+  onTelemetryUpdate,
+  onPositionUpdate,
 }: AnimatedOrbitProps) {
-  const { currentPosition } = useOrbitAnimation({
+  const posUpdateRef = useRef(onPositionUpdate);
+  posUpdateRef.current = onPositionUpdate;
+
+  const { currentPosition, currentIndex } = useOrbitAnimation({
     positions: trajectory.positions,
     times: trajectory.times,
-    speed: animationSpeed,
+    velocities: trajectory.velocities,
+    speed: playback.speed,
     loop: true,
+    paused: playback.paused,
+    onTelemetryUpdate,
   });
+
+  // Push satellite position up for camera follow
+  // (done in the next frame to avoid re-render loops)
+  if (posUpdateRef.current) {
+    posUpdateRef.current(currentPosition);
+  }
+
+  // Compute orbit radius for the inclination ring
+  const orbitRadius =
+    trajectory.positions.length > 0
+      ? Math.sqrt(
+          trajectory.positions[0][0] ** 2 +
+          trajectory.positions[0][1] ** 2 +
+          trajectory.positions[0][2] ** 2,
+        )
+      : 1.063;
 
   return (
     <>
-      <OrbitPath positions={trajectory.positions} color={orbitColor} />
+      <OrbitPath
+        positions={trajectory.positions}
+        currentIndex={currentIndex}
+        color={orbitColor}
+      />
       <Satellite position={currentPosition} />
+      <OrbitPlane orbitRadius={orbitRadius} />
     </>
   );
 }
@@ -163,30 +198,43 @@ function AnimatedOrbit({
 /* ────────────────────────────────────────────────────────────────
  * SpaceScene — root 3D container for mission-control.
  *
- * Visual upgrades in this version:
- *   • ACES filmic tone mapping for cinematic contrast
- *   • Physically tuned lighting — very low ambient (0.05) plus
- *     a strong directional "sun" for a crisp day/night split
- *   • Camera starts at z=8 (far) for the intro zoom animation
- *   • Stars tuned with factor=4 for depth parallax
- *   • Satellite orbit path and animated satellite
- *
- * Extension points:
- *   • Add more <OrbitLayer /> for multi-satellite support
- *   • Connect to WebSocket for real-time trajectory updates
+ * Accepts playback state and telemetry callback from the page-
+ * level HUD overlay.
  * ──────────────────────────────────────────────────────────────── */
 
-export default function SpaceScene() {
+interface SpaceSceneProps {
+  /** Playback controls from the HUD. */
+  playback?: OrbitPlaybackState;
+  /** Callback to push telemetry to the HUD. */
+  onTelemetryUpdate?: (params: OrbitalParameters) => void;
+  /** Callback to push satellite position (for camera follow). */
+  onPositionUpdate?: (pos: [number, number, number]) => void;
+}
+
+export default function SpaceScene({
+  playback = { paused: false, speed: 50, followCamera: false },
+  onTelemetryUpdate,
+  onPositionUpdate,
+}: SpaceSceneProps) {
+  // Store satellite position for camera follow
+  const [satPos, setSatPos] = useState<[number, number, number]>([0, 0, 0]);
+
+  const handlePositionUpdate = useCallback(
+    (pos: [number, number, number]) => {
+      setSatPos(pos);
+      onPositionUpdate?.(pos);
+    },
+    [onPositionUpdate],
+  );
+
   return (
     <Canvas
-      /* Camera starts far out — CameraController will lerp it in */
       camera={{
         position: [0, 0, 8],
         fov: 55,
         near: 0.1,
         far: 1000,
       }}
-      /* Cap pixel ratio to 2× — retina quality without GPU strain */
       dpr={[1, 2]}
       gl={{
         antialias: true,
@@ -203,20 +251,17 @@ export default function SpaceScene() {
       }}
     >
       {/* ── Lighting ────────────────────────────────────────── */}
-      {/* Very low ambient — lets the dark side stay dark so
-          emissive city-lights can shine through.              */}
       <ambientLight intensity={0.05} />
-      {/* Strong directional "sun" for a clean day/night split */}
       <directionalLight position={[5, 2, 2]} intensity={2} />
 
       {/* ── Scene content ───────────────────────────────────── */}
       <Suspense fallback={null}>
         <Earth />
-
-        {/* ── Satellite orbit ─────────────────────────────── */}
-        <OrbitLayer />
-
-        {/* Star field — tuned for depth parallax */}
+        <OrbitLayer
+          playback={playback}
+          onTelemetryUpdate={onTelemetryUpdate}
+          onPositionUpdate={handlePositionUpdate}
+        />
         <Stars
           radius={100}
           depth={60}
@@ -228,10 +273,11 @@ export default function SpaceScene() {
         />
       </Suspense>
 
-      {/* ── Controls + intro animation ──────────────────────── */}
-      <CameraController />
-
-      {/* Eagerly preload all drei assets (textures, etc.) */}
+      {/* ── Controls ────────────────────────────────────────── */}
+      <CameraController
+        followSatellite={playback.followCamera}
+        satellitePosition={satPos}
+      />
       <Preload all />
     </Canvas>
   );
