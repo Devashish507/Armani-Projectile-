@@ -36,3 +36,20 @@ export interface HealthResponse {
 export async function fetchHealth(): Promise<HealthResponse> {
   return request<HealthResponse>("/health");
 }
+
+// ── Orbit Simulation ──────────────────────────────────────────
+
+import type {
+  OrbitSimulationRequest,
+  OrbitSimulationResponse,
+} from "@/types/orbit";
+
+/** Run a two-body orbit simulation and return the trajectory. */
+export async function fetchOrbitSimulation(
+  body: OrbitSimulationRequest,
+): Promise<OrbitSimulationResponse> {
+  return request<OrbitSimulationResponse>("/api/v1/orbit/simulate", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
