@@ -37,6 +37,13 @@ interface UseOrbitWebSocketOptions {
 
 // ── Return type ────────────────────────────────────────────────────
 
+export interface BufferedFrame {
+  position: [number, number, number];
+  velocity: [number, number, number];
+  localTime: number; 
+  step: number;
+}
+
 interface UseOrbitWebSocketReturn {
   /** Ref to the latest scaled position [world units]. Read in useFrame. */
   latestPositionRef: React.RefObject<[number, number, number]>;
@@ -44,6 +51,8 @@ interface UseOrbitWebSocketReturn {
   latestVelocityRef: React.RefObject<[number, number, number]>;
   /** Accumulated trajectory positions (scaled) for the orbit trail. */
   trajectoryRef: React.RefObject<[number, number, number][]>;
+  /** Buffer of recent frames with local timestamps for smooth interpolation. */
+  bufferRef: React.RefObject<BufferedFrame[]>;
   /** Current connection state (for fallback logic). */
   connectionState: WsConnectionState;
   /** Manually reconnect. */
@@ -71,12 +80,15 @@ export function useOrbitWebSocket({
   const latestPositionRef = useRef<[number, number, number]>([0, 0, 0]);
   const latestVelocityRef = useRef<[number, number, number]>([0, 0, 0]);
   const trajectoryRef = useRef<[number, number, number][]>([]);
+  const bufferRef = useRef<BufferedFrame[]>([]);
   const stepRef = useRef<number>(0);
   const totalStepsRef = useRef<number>(0);
 
   // Keep params in a ref so the effect doesn't re-run on every render
   const paramsRef = useRef(params);
-  paramsRef.current = params;
+  useEffect(() => {
+    paramsRef.current = params;
+  }, [params]);
 
   const connect = useCallback(() => {
     // Close any existing connection
@@ -85,8 +97,9 @@ export function useOrbitWebSocket({
       wsRef.current = null;
     }
 
-    // Reset trajectory buffer
+    // Reset trajectory and buffer
     trajectoryRef.current = [];
+    bufferRef.current = [];
     stepRef.current = 0;
     totalStepsRef.current = 0;
 
@@ -131,6 +144,20 @@ export function useOrbitWebSocket({
             latestVelocityRef.current = scaledVel;
             stepRef.current = msg.step;
             totalStepsRef.current = msg.total_steps;
+
+            // Accumulate for interpolation buffer
+            bufferRef.current.push({
+              position: scaledPos,
+              velocity: scaledVel,
+              localTime: performance.now(),
+              step: msg.step,
+            });
+
+            // Prune buffer to keep only the last ~20 frames (1 second at 20Hz)
+            // It needs at least 2 frames for interpolation
+            if (bufferRef.current.length > 30) {
+              bufferRef.current.splice(0, bufferRef.current.length - 20);
+            }
 
             // Accumulate for orbit trail
             trajectoryRef.current.push(scaledPos);
@@ -195,6 +222,7 @@ export function useOrbitWebSocket({
     latestPositionRef,
     latestVelocityRef,
     trajectoryRef,
+    bufferRef,
     connectionState,
     reconnect: connect,
     disconnect,

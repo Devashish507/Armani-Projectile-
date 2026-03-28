@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState, useCallback, useRef } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Stars, Preload } from "@react-three/drei";
 import { ACESFilmicToneMapping } from "three";
+import * as THREE from "three";
 import Earth from "./Earth";
 import CameraController from "./CameraController";
 import OrbitPath from "./OrbitPath";
@@ -198,56 +199,91 @@ function StreamedOrbit({
   onPositionUpdate,
 }: StreamedOrbitProps) {
   const telemetryRef = useRef(onTelemetryUpdate);
-  telemetryRef.current = onTelemetryUpdate;
-
   const posUpdateRef = useRef(onPositionUpdate);
-  posUpdateRef.current = onPositionUpdate;
 
-  // We need local state for the satellite component since it expects a prop,
-  // but we update it via useFrame so it's synchronised with WebGL render cycle
-  // and doesn't trigger React context/prop cascades up the tree.
-  const [currentPos, setCurrentPos] = useState<[number, number, number]>([
-    0, 0, 0,
-  ]);
+  useEffect(() => {
+    telemetryRef.current = onTelemetryUpdate;
+    posUpdateRef.current = onPositionUpdate;
+  }, [onTelemetryUpdate, onPositionUpdate]);
+
+  // We wrap the satellite in a group we control directly via ref.
+  // This completely eliminates React re-renders during playback!
+  const wrapperRef = useRef<THREE.Group>(null);
+
+  // Time-delayed playback buffer (e.g. 150ms delay)
+  const BUFFER_DELAY_MS = 150;
 
   useFrame(() => {
-    const latest = ws.latestPositionRef.current;
-    if (
-      latest[0] !== currentPos[0] ||
-      latest[1] !== currentPos[1] ||
-      latest[2] !== currentPos[2]
-    ) {
-      setCurrentPos(latest);
+    const buffer = ws.bufferRef.current;
+    if (buffer.length === 0) return;
 
-      if (posUpdateRef.current) {
-        posUpdateRef.current(latest);
+    // We want to render the state as it was BUFFER_DELAY_MS ago
+    const renderTime = performance.now() - BUFFER_DELAY_MS;
+
+    let frame0 = buffer[0];
+    let frame1 = buffer[buffer.length - 1];
+
+    if (renderTime <= frame0.localTime) {
+      // Not enough buffer yet, sit at the first frame
+      frame1 = frame0;
+    } else if (renderTime >= frame1.localTime) {
+      // Drained buffer (lag spike), sit at the last frame
+      frame0 = frame1;
+    } else {
+      // Find the two frames spanning renderTime
+      for (let i = buffer.length - 1; i > 0; i--) {
+        if (buffer[i - 1].localTime <= renderTime && renderTime <= buffer[i].localTime) {
+          frame0 = buffer[i - 1];
+          frame1 = buffer[i];
+          break;
+        }
       }
+    }
 
-      // Compute telemetry
-      if (telemetryRef.current) {
-        const dist = Math.sqrt(
-          latest[0] ** 2 + latest[1] ** 2 + latest[2] ** 2,
-        );
-        const altitudeKm = (dist - 1) * 6371;
+    // Interpolation factor t: [0, 1]
+    let t = 0;
+    if (frame1.localTime > frame0.localTime) {
+      t = (renderTime - frame0.localTime) / (frame1.localTime - frame0.localTime);
+    }
 
-        const vel = ws.latestVelocityRef.current;
-        const velocityKmS =
-          Math.sqrt(vel[0] ** 2 + vel[1] ** 2 + vel[2] ** 2) * 6371;
+    // Linear interpolation for position
+    const x = frame0.position[0] + (frame1.position[0] - frame0.position[0]) * t;
+    const y = frame0.position[1] + (frame1.position[1] - frame0.position[1]) * t;
+    const z = frame0.position[2] + (frame1.position[2] - frame0.position[2]) * t;
 
-        // Progress based on streaming step
-        const progress =
-          ws.totalStepsRef.current > 0
-            ? ws.stepRef.current / ws.totalStepsRef.current
-            : 0;
+    // Apply native mutation to bypass React rendering costs
+    if (wrapperRef.current) {
+      wrapperRef.current.position.set(x, y, z);
+    }
 
-        telemetryRef.current({
-          altitudeKm: Math.max(0, altitudeKm),
-          velocityKmS: Math.abs(velocityKmS),
-          inclinationDeg: 51.6, // Hardware/params derived
-          periodMin: ORBIT_PARAMS.time_span / 60,
-          progress,
-        });
-      }
+    if (posUpdateRef.current) {
+      posUpdateRef.current([x, y, z]);
+    }
+
+    if (telemetryRef.current) {
+      const dist = Math.sqrt(x ** 2 + y ** 2 + z ** 2);
+      const altitudeKm = (dist - 1) * 6371;
+
+      // Interpolate velocity
+      const vx = frame0.velocity[0] + (frame1.velocity[0] - frame0.velocity[0]) * t;
+      const vy = frame0.velocity[1] + (frame1.velocity[1] - frame0.velocity[1]) * t;
+      const vz = frame0.velocity[2] + (frame1.velocity[2] - frame0.velocity[2]) * t;
+      const velocityKmS = Math.sqrt(vx ** 2 + vy ** 2 + vz ** 2) * 6371;
+
+      // Interpolate progress/step
+      const currentStep = frame0.step + (frame1.step - frame0.step) * t;
+      const progress =
+        ws.totalStepsRef.current > 0
+          ? currentStep / ws.totalStepsRef.current
+          : 0;
+
+      telemetryRef.current({
+        altitudeKm: Math.max(0, altitudeKm),
+        velocityKmS: Math.abs(velocityKmS),
+        inclinationDeg: 51.6, // Hardware/params derived
+        periodMin: ORBIT_PARAMS.time_span / 60,
+        progress,
+      });
     }
   });
 
@@ -261,14 +297,14 @@ function StreamedOrbit({
 
   return (
     <>
-      {/* OrbitPath expects a fixed array and currentIndex, which dynamically slices the trail. 
-          For streaming, the array itself is growing, so we pass it all as the 'trail'. */}
       <OrbitPath
         positions={positions}
         currentIndex={positions.length - 1} // draw the whole growing line
         color={orbitColor}
       />
-      <Satellite position={currentPos} />
+      <group ref={wrapperRef}>
+        <Satellite position={[0, 0, 0]} />
+      </group>
       <OrbitPlane orbitRadius={orbitRadius} />
     </>
   );
@@ -294,7 +330,9 @@ function AnimatedOrbit({
   onPositionUpdate,
 }: AnimatedOrbitProps) {
   const posUpdateRef = useRef(onPositionUpdate);
-  posUpdateRef.current = onPositionUpdate;
+  useEffect(() => {
+    posUpdateRef.current = onPositionUpdate;
+  }, [onPositionUpdate]);
 
   const { currentPosition, currentIndex } = useOrbitAnimation({
     positions: trajectory.positions,
@@ -306,9 +344,11 @@ function AnimatedOrbit({
     onTelemetryUpdate,
   });
 
-  if (posUpdateRef.current) {
-    posUpdateRef.current(currentPosition);
-  }
+  useEffect(() => {
+    if (posUpdateRef.current) {
+      posUpdateRef.current(currentPosition);
+    }
+  }, [currentPosition]);
 
   const orbitRadius =
     trajectory.positions.length > 0
