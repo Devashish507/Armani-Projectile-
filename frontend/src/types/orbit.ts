@@ -90,3 +90,40 @@ export interface OrbitalParameters {
   /** 0→1 progress through current orbit. */
   progress: number;
 }
+
+// ── WebSocket message types ────────────────────────────────────────
+
+/** Single position frame received over the WebSocket. */
+export interface WsPositionUpdate {
+  type: "position_update";
+  time: number;
+  position: [number, number, number];
+  velocity: [number, number, number];
+  step: number;
+  total_steps: number;
+}
+
+/** End-of-stream marker. */
+export interface WsSimulationComplete {
+  type: "simulation_complete";
+}
+
+/** Server-side error. */
+export interface WsError {
+  type: "error";
+  detail: string;
+}
+
+/** Discriminated union of all incoming WebSocket messages. */
+export type WsOrbitMessage = WsPositionUpdate | WsSimulationComplete | WsError;
+
+/** WebSocket connection lifecycle states. */
+export type WsConnectionState =
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "streaming"
+  | "complete"
+  | "error"
+  | "closed";
+

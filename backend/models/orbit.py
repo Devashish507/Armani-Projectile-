@@ -159,3 +159,50 @@ class OrbitResponse(BaseModel):
         default=None,
         description="Solver diagnostics (omitted when include_metadata=false)",
     )
+
+
+# ── WebSocket Parameters ────────────────────────────────────────────
+
+
+class WsOrbitParams(BaseModel):
+    """Orbit parameters received over the WebSocket channel.
+
+    Mirrors the core fields of :class:`OrbitRequest` without the REST-only
+    options (``max_points``, ``include_metadata``).
+    """
+
+    initial_position: list[float] = Field(
+        ..., description="Cartesian position [x, y, z] in metres",
+    )
+    initial_velocity: list[float] = Field(
+        ..., description="Cartesian velocity [vx, vy, vz] in m/s",
+    )
+    time_span: float = Field(..., gt=0, description="Total simulation time in seconds")
+    time_step: float = Field(..., gt=0, description="Output time step in seconds")
+
+    @field_validator("initial_position")
+    @classmethod
+    def position_must_be_3d(cls, v: list[float]) -> list[float]:
+        if len(v) != 3:
+            raise ValueError(
+                f"initial_position must have exactly 3 elements, got {len(v)}"
+            )
+        return v
+
+    @field_validator("initial_velocity")
+    @classmethod
+    def velocity_must_be_3d(cls, v: list[float]) -> list[float]:
+        if len(v) != 3:
+            raise ValueError(
+                f"initial_velocity must have exactly 3 elements, got {len(v)}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def step_must_not_exceed_span(self) -> WsOrbitParams:
+        if self.time_step > self.time_span:
+            raise ValueError(
+                f"time_step ({self.time_step}) cannot exceed "
+                f"time_span ({self.time_span})"
+            )
+        return self

@@ -68,9 +68,22 @@ function scaleTrajectory(data: OrbitSimulationResponse): ScaledTrajectory {
   };
 }
 
+import { useOrbitWebSocket } from "@/hooks/useOrbitWebSocket";
+
+// ── Shared configuration ──────────────────────────────────────────
+
+const ORBIT_PARAMS = {
+  initial_position: [7_000_000, 0, 0] as [number, number, number],
+  initial_velocity: [0, 7546, 0] as [number, number, number],
+  time_span: 5400,
+  time_step: 10,
+};
+
+const WS_URL =
+  process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws/orbit";
+
 /* ────────────────────────────────────────────────────────────────
- * OrbitLayer — fetches orbit data, then renders orbit path,
- * animated satellite, and orbital plane indicator.
+ * OrbitLayer — orchestrates data fetching via WebSocket or REST.
  * ──────────────────────────────────────────────────────────────── */
 
 interface OrbitLayerProps {
@@ -93,7 +106,20 @@ function OrbitLayer({
   onPositionUpdate,
   orbitColor = "#00e5ff",
 }: OrbitLayerProps) {
-  const [trajectory, setTrajectory] = useState<ScaledTrajectory | null>(
+  // ── WebSocket streaming ──────────────────────────────────────────
+  const ws = useOrbitWebSocket({
+    url: WS_URL,
+    params: ORBIT_PARAMS,
+    // Only connect if we aren't using an external trajectory
+    enabled: !externalTrajectory,
+  });
+
+  // Flow control: WebSockets try first. If we hit an error gracefully fall back.
+  const useFallback =
+    externalTrajectory !== undefined || ws.connectionState === "error";
+
+  // ── REST Fallback (existing behaviour) ───────────────────────────
+  const [restTrajectory, setRestTrajectory] = useState<ScaledTrajectory | null>(
     externalTrajectory ?? null,
   );
 
@@ -102,30 +128,49 @@ function OrbitLayer({
 
     try {
       const response = await fetchOrbitSimulation({
-        initial_position: [7_000_000, 0, 0],
-        initial_velocity: [0, 7546, 0],
-        time_span: 5400,
-        time_step: 10,
+        ...ORBIT_PARAMS,
         max_points: 500,
         include_metadata: false,
       });
-      setTrajectory(scaleTrajectory(response));
+      setRestTrajectory(scaleTrajectory(response));
     } catch {
       console.warn("[OrbitLayer] Backend unavailable, using mock orbit data.");
-      setTrajectory(generateMockOrbit());
+      setRestTrajectory(generateMockOrbit());
     }
   }, [externalTrajectory]);
 
   useEffect(() => {
-    loadOrbit();
-  }, [loadOrbit]);
+    if (useFallback) {
+      loadOrbit();
+    }
+  }, [useFallback, loadOrbit]);
 
-  if (!trajectory || trajectory.positions.length < 2) return null;
+  // ── Render correct layer ─────────────────────────────────────────
+  if (useFallback) {
+    if (!restTrajectory || restTrajectory.positions.length < 2) return null;
+    return (
+      <AnimatedOrbit
+        trajectory={restTrajectory}
+        playback={playback}
+        orbitColor={orbitColor}
+        onTelemetryUpdate={onTelemetryUpdate}
+        onPositionUpdate={onPositionUpdate}
+      />
+    );
+  }
+
+  // If streaming but no data has arrived yet, don't bomb the scene
+  if (
+    ws.connectionState === "idle" ||
+    ws.connectionState === "connecting" ||
+    ws.trajectoryRef.current.length === 0
+  ) {
+    return null;
+  }
 
   return (
-    <AnimatedOrbit
-      trajectory={trajectory}
-      playback={playback}
+    <StreamedOrbit
+      ws={ws}
       orbitColor={orbitColor}
       onTelemetryUpdate={onTelemetryUpdate}
       onPositionUpdate={onPositionUpdate}
@@ -134,8 +179,103 @@ function OrbitLayer({
 }
 
 /* ────────────────────────────────────────────────────────────────
- * AnimatedOrbit — separated so the animation hook has guaranteed
- * access to a valid trajectory (no conditional hooks).
+ * StreamedOrbit — reads from WebSocket refs directly (no re-renders).
+ * ──────────────────────────────────────────────────────────────── */
+
+import { useFrame } from "@react-three/fiber";
+
+interface StreamedOrbitProps {
+  ws: ReturnType<typeof useOrbitWebSocket>;
+  orbitColor: string;
+  onTelemetryUpdate?: (params: OrbitalParameters) => void;
+  onPositionUpdate?: (pos: [number, number, number]) => void;
+}
+
+function StreamedOrbit({
+  ws,
+  orbitColor,
+  onTelemetryUpdate,
+  onPositionUpdate,
+}: StreamedOrbitProps) {
+  const telemetryRef = useRef(onTelemetryUpdate);
+  telemetryRef.current = onTelemetryUpdate;
+
+  const posUpdateRef = useRef(onPositionUpdate);
+  posUpdateRef.current = onPositionUpdate;
+
+  // We need local state for the satellite component since it expects a prop,
+  // but we update it via useFrame so it's synchronised with WebGL render cycle
+  // and doesn't trigger React context/prop cascades up the tree.
+  const [currentPos, setCurrentPos] = useState<[number, number, number]>([
+    0, 0, 0,
+  ]);
+
+  useFrame(() => {
+    const latest = ws.latestPositionRef.current;
+    if (
+      latest[0] !== currentPos[0] ||
+      latest[1] !== currentPos[1] ||
+      latest[2] !== currentPos[2]
+    ) {
+      setCurrentPos(latest);
+
+      if (posUpdateRef.current) {
+        posUpdateRef.current(latest);
+      }
+
+      // Compute telemetry
+      if (telemetryRef.current) {
+        const dist = Math.sqrt(
+          latest[0] ** 2 + latest[1] ** 2 + latest[2] ** 2,
+        );
+        const altitudeKm = (dist - 1) * 6371;
+
+        const vel = ws.latestVelocityRef.current;
+        const velocityKmS =
+          Math.sqrt(vel[0] ** 2 + vel[1] ** 2 + vel[2] ** 2) * 6371;
+
+        // Progress based on streaming step
+        const progress =
+          ws.totalStepsRef.current > 0
+            ? ws.stepRef.current / ws.totalStepsRef.current
+            : 0;
+
+        telemetryRef.current({
+          altitudeKm: Math.max(0, altitudeKm),
+          velocityKmS: Math.abs(velocityKmS),
+          inclinationDeg: 51.6, // Hardware/params derived
+          periodMin: ORBIT_PARAMS.time_span / 60,
+          progress,
+        });
+      }
+    }
+  });
+
+  const positions = ws.trajectoryRef.current;
+  const orbitRadius =
+    positions.length > 0
+      ? Math.sqrt(
+          positions[0][0] ** 2 + positions[0][1] ** 2 + positions[0][2] ** 2,
+        )
+      : 1.063;
+
+  return (
+    <>
+      {/* OrbitPath expects a fixed array and currentIndex, which dynamically slices the trail. 
+          For streaming, the array itself is growing, so we pass it all as the 'trail'. */}
+      <OrbitPath
+        positions={positions}
+        currentIndex={positions.length - 1} // draw the whole growing line
+        color={orbitColor}
+      />
+      <Satellite position={currentPos} />
+      <OrbitPlane orbitRadius={orbitRadius} />
+    </>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────
+ * AnimatedOrbit — existing REST/Mock fallback animation.
  * ──────────────────────────────────────────────────────────────── */
 
 interface AnimatedOrbitProps {
@@ -166,13 +306,10 @@ function AnimatedOrbit({
     onTelemetryUpdate,
   });
 
-  // Push satellite position up for camera follow
-  // (done in the next frame to avoid re-render loops)
   if (posUpdateRef.current) {
     posUpdateRef.current(currentPosition);
   }
 
-  // Compute orbit radius for the inclination ring
   const orbitRadius =
     trajectory.positions.length > 0
       ? Math.sqrt(
