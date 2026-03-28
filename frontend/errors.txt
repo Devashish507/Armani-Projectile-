@@ -1,0 +1,165 @@
+
+C:\Users\devas\OneDrive\Desktop\Armani\frontend\src\components\scene\SpaceScene.tsx
+  Line 145:7 - Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+C:\Users\devas\OneDrive\Desktop\Armani\frontend\src\components\scene\SpaceScene.tsx:145:7
+  143 |   useEffect(() => {
+  144 |     if (useFallback) {
+> 145 |       loadOrbit();
+      |       ^^^^^^^^^ Avoid calling setState() directly within an effect
+  146 |     }
+  147 |   }, [useFallback, loadOrbit]);
+  148 |
+  Line 202:3 - Error: Cannot access refs during render
+
+React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected (https://react.dev/reference/react/useRef).
+
+C:\Users\devas\OneDrive\Desktop\Armani\frontend\src\components\scene\SpaceScene.tsx:202:3
+  200 | }: StreamedOrbitProps) {
+  201 |   const telemetryRef = useRef(onTelemetryUpdate);
+> 202 |   telemetryRef.current = onTelemetryUpdate;
+      |   ^^^^^^^^^^^^^^^^^^^^ Cannot update ref during render
+  203 |
+  204 |   const posUpdateRef = useRef(onPositionUpdate);
+  205 |   posUpdateRef.current = onPositionUpdate;
+  Line 205:3 - Error: Cannot access refs during render
+
+React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected (https://react.dev/reference/react/useRef).
+
+C:\Users\devas\OneDrive\Desktop\Armani\frontend\src\components\scene\SpaceScene.tsx:205:3
+  203 |
+  204 |   const posUpdateRef = useRef(onPositionUpdate);
+> 205 |   posUpdateRef.current = onPositionUpdate;
+      |   ^^^^^^^^^^^^^^^^^^^^ Cannot update ref during render
+  206 |
+  207 |   // We wrap the satellite in a group we control directly via ref.
+  208 |   // This completely eliminates React re-renders during playback!
+  Line 331:3 - Error: Cannot access refs during render
+
+React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected (https://react.dev/reference/react/useRef).
+
+C:\Users\devas\OneDrive\Desktop\Armani\frontend\src\components\scene\SpaceScene.tsx:331:3
+  329 | }: AnimatedOrbitProps) {
+  330 |   const posUpdateRef = useRef(onPositionUpdate);
+> 331 |   posUpdateRef.current = onPositionUpdate;
+      |   ^^^^^^^^^^^^^^^^^^^^ Cannot update ref during render
+  332 |
+  333 |   const { currentPosition, currentIndex } = useOrbitAnimation({
+  334 |     positions: trajectory.positions,
+  Line 343:7 - Error: Cannot access refs during render
+
+React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected (https://react.dev/reference/react/useRef).
+
+C:\Users\devas\OneDrive\Desktop\Armani\frontend\src\components\scene\SpaceScene.tsx:343:7
+  341 |   });
+  342 |
+> 343 |   if (posUpdateRef.current) {
+      |       ^^^^^^^^^^^^^^^^^^^^ Cannot access ref value during render
+  344 |     posUpdateRef.current(currentPosition);
+  345 |   }
+  346 |
+  Line 344:5 - Error: Cannot access refs during render
+
+React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected (https://react.dev/reference/react/useRef).
+
+C:\Users\devas\OneDrive\Desktop\Armani\frontend\src\components\scene\SpaceScene.tsx:344:5
+  342 |
+  343 |   if (posUpdateRef.current) {
+> 344 |     posUpdateRef.current(currentPosition);
+      |     ^^^^^^^^^^^^ Passing a ref to a function may read its value during render
+  345 |   }
+  346 |
+  347 |   const orbitRadius =
+  Line 344:5 - Error: Cannot access refs during render
+
+React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected (https://react.dev/reference/react/useRef).
+
+C:\Users\devas\OneDrive\Desktop\Armani\frontend\src\components\scene\SpaceScene.tsx:344:5
+  342 |
+  343 |   if (posUpdateRef.current) {
+> 344 |     posUpdateRef.current(currentPosition);
+      |     ^^^^^^^^^^^^^^^^^^^^ Passing a ref to a function may read its value during render
+  345 |   }
+  346 |
+  347 |   const orbitRadius =
+
+C:\Users\devas\OneDrive\Desktop\Armani\frontend\src\components\scene\useOrbitAnimation.ts
+  Line 74:53 - Error: Cannot access refs during render
+
+React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected (https://react.dev/reference/react/useRef).
+
+C:\Users\devas\OneDrive\Desktop\Armani\frontend\src\components\scene\useOrbitAnimation.ts:74:53
+  72 |
+  73 |   // Rebuild curve when positions change
+> 74 |   if (positions.length >= 2 && positions.length !== prevPositionsLength.current) {
+     |                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ Cannot access ref value during render
+  75 |     const points = positions.map(
+  76 |       ([x, y, z]) => new THREE.Vector3(x, y, z),
+  77 |     );
+  Line 78:5 - Error: Cannot access refs during render
+
+React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected (https://react.dev/reference/react/useRef).
+
+C:\Users\devas\OneDrive\Desktop\Armani\frontend\src\components\scene\useOrbitAnimation.ts:78:5
+  76 |       ([x, y, z]) => new THREE.Vector3(x, y, z),
+  77 |     );
+> 78 |     curveRef.current = new THREE.CatmullRomCurve3(points, loop, "catmullrom", 0.5);
+     |     ^^^^^^^^^^^^^^^^ Cannot update ref during render
+  79 |     prevPositionsLength.current = positions.length;
+  80 |   }
+  81 |
+  Line 79:5 - Error: Cannot access refs during render
+
+React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected (https://react.dev/reference/react/useRef).
+
+C:\Users\devas\OneDrive\Desktop\Armani\frontend\src\components\scene\useOrbitAnimation.ts:79:5
+  77 |     );
+  78 |     curveRef.current = new THREE.CatmullRomCurve3(points, loop, "catmullrom", 0.5);
+> 79 |     prevPositionsLength.current = positions.length;
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ Cannot update ref during render
+  80 |   }
+  81 |
+  82 |   // Memoised telemetry callback ref to avoid stale closures
+  Line 84:3 - Error: Cannot access refs during render
+
+React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected (https://react.dev/reference/react/useRef).
+
+C:\Users\devas\OneDrive\Desktop\Armani\frontend\src\components\scene\useOrbitAnimation.ts:84:3
+  82 |   // Memoised telemetry callback ref to avoid stale closures
+  83 |   const telemetryRef = useRef(onTelemetryUpdate);
+> 84 |   telemetryRef.current = onTelemetryUpdate;
+     |   ^^^^^^^^^^^^^^^^^^^^ Cannot update ref during render
+  85 |
+  86 |   // Stable Vector3 for reuse (avoid per-frame allocations)
+  87 |   const tempVec = useRef(new THREE.Vector3());
+  Line 161:10 - Error: Cannot access refs during render
+
+React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected (https://react.dev/reference/react/useRef).
+
+C:\Users\devas\OneDrive\Desktop\Armani\frontend\src\components\scene\useOrbitAnimation.ts:161:10
+  159 |   });
+  160 |
+> 161 |   return resultRef.current;
+      |          ^^^^^^^^^^^^^^^^^ Cannot access ref value during render
+  162 | }
+  163 |
+
+C:\Users\devas\OneDrive\Desktop\Armani\frontend\src\hooks\useOrbitWebSocket.ts
+  Line 89:3 - Error: Cannot access refs during render
+
+React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected (https://react.dev/reference/react/useRef).
+
+C:\Users\devas\OneDrive\Desktop\Armani\frontend\src\hooks\useOrbitWebSocket.ts:89:3
+  87 |   // Keep params in a ref so the effect doesn't re-run on every render
+  88 |   const paramsRef = useRef(params);
+> 89 |   paramsRef.current = params;
+     |   ^^^^^^^^^^^^^^^^^ Cannot update ref during render
+  90 |
+  91 |   const connect = useCallback(() => {
+  92 |     // Close any existing connection

@@ -2,8 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
-import { fetchHealth } from "@/lib/api";
-import type { OrbitPlaybackState, OrbitalParameters } from "@/types/orbit";
+import type { OrbitPlaybackState, OrbitalParameters, WsConnectionState } from "@/types/orbit";
 
 /* ────────────────────────────────────────────────────────────────
  * Dynamic import — Three.js / WebGL must only run on the client.
@@ -32,7 +31,7 @@ const SPEED_OPTIONS = [1, 10, 50, 100] as const;
  * ════════════════════════════════════════════════════════════════ */
 
 export default function HomePage() {
-  const [status, setStatus] = useState<ConnectionStatus>("checking");
+  const [wsStatus, setWsStatus] = useState<WsConnectionState>("idle");
   const [playback, setPlayback] = useState<OrbitPlaybackState>({
     paused: false,
     speed: 50,
@@ -57,30 +56,42 @@ export default function HomePage() {
     }
   }, []);
 
-  // Health check polling
-  useEffect(() => {
-    let cancelled = false;
-    async function check() {
-      try {
-        const data = await fetchHealth();
-        if (!cancelled) setStatus(data.status === "ok" ? "online" : "offline");
-      } catch {
-        if (!cancelled) setStatus("offline");
-      }
-    }
-    check();
-    const interval = setInterval(check, 10_000);
-    return () => { cancelled = true; clearInterval(interval); };
+  const handleConnectionChange = useCallback((state: WsConnectionState) => {
+    setWsStatus(state);
   }, []);
 
   const togglePause = () => setPlayback((p) => ({ ...p, paused: !p.paused }));
   const setSpeed = (speed: number) => setPlayback((p) => ({ ...p, speed }));
   const toggleFollow = () => setPlayback((p) => ({ ...p, followCamera: !p.followCamera }));
 
+  const getStatusDisplay = (state: WsConnectionState) => {
+    switch (state) {
+      case "streaming":
+        return { text: "LIVE (WebSocket)", dot: "online" as const, source: "STREAMING" };
+      case "connecting":
+      case "idle":
+      case "connected":
+        return { text: "BUFFERING", dot: "checking" as const, source: "SYNCING" };
+      case "error":
+      case "closed":
+        return { text: "FALLBACK MODE", dot: "offline" as const, source: "REST API" };
+      case "complete":
+        return { text: "SIMULATION COMPLETE", dot: "offline" as const, source: "IDLE" };
+      default:
+        return { text: "UNKNOWN", dot: "offline" as const, source: "UNKNOWN" };
+    }
+  };
+
+  const display = getStatusDisplay(wsStatus);
+
   return (
     <main className="relative w-screen h-screen overflow-hidden bg-black">
       {/* ── Full-viewport 3D Scene ─────────────────────────── */}
-      <SpaceScene playback={playback} onTelemetryUpdate={handleTelemetry} />
+      <SpaceScene 
+        playback={playback} 
+        onTelemetryUpdate={handleTelemetry} 
+        onConnectionChange={handleConnectionChange}
+      />
 
       {/* ═════════════════════════════════════════════════════
        *  TOP-LEFT — Branding
@@ -144,16 +155,16 @@ export default function HomePage() {
       <div className="absolute bottom-4 left-5 z-20 pointer-events-auto flex items-center gap-2">
         {/* Connection status pill */}
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/60 border border-white/8 backdrop-blur-sm">
-          <StatusDot status={status} />
+          <StatusDot status={display.dot} />
           <span className="text-[11px] font-mono text-white/50">
-            {status === "online" ? "API" : status === "checking" ? "..." : "OFFLINE"}
+            {display.text}
           </span>
         </div>
 
         {/* Simulation source */}
         <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/60 border border-white/8 backdrop-blur-sm">
           <span className="text-[11px] font-mono text-white/50">
-            {status === "online" ? "LIVE" : "MOCK"}
+            {display.source}
           </span>
         </div>
 

@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from core.config import settings
-from routers import health, orbit
+from routers import health, orbit, ws_orbit
 
 # ── Application factory ─────────────────────────────────────────
 app = FastAPI(
@@ -32,3 +32,4 @@ app.add_middleware(
 # routers for missions, simulations, telemetry, etc.
 app.include_router(health.router)
 app.include_router(orbit.router)
+app.include_router(ws_orbit.router)

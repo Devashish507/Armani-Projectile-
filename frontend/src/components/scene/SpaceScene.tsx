@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState, useCallback, useRef } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Stars, Preload } from "@react-three/drei";
 import { ACESFilmicToneMapping } from "three";
+import * as THREE from "three";
 import Earth from "./Earth";
 import CameraController from "./CameraController";
 import OrbitPath from "./OrbitPath";
@@ -17,6 +18,7 @@ import {
   type ScaledTrajectory,
   type OrbitPlaybackState,
   type OrbitalParameters,
+  type WsConnectionState,
 } from "@/types/orbit";
 
 /* ────────────────────────────────────────────────────────────────
@@ -68,9 +70,22 @@ function scaleTrajectory(data: OrbitSimulationResponse): ScaledTrajectory {
   };
 }
 
+import { useOrbitWebSocket } from "@/hooks/useOrbitWebSocket";
+
+// ── Shared configuration ──────────────────────────────────────────
+
+const ORBIT_PARAMS = {
+  initial_position: [7_000_000, 0, 0] as [number, number, number],
+  initial_velocity: [0, 7546, 0] as [number, number, number],
+  time_span: 5400,
+  time_step: 10,
+};
+
+const WS_URL =
+  process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws/orbit";
+
 /* ────────────────────────────────────────────────────────────────
- * OrbitLayer — fetches orbit data, then renders orbit path,
- * animated satellite, and orbital plane indicator.
+ * OrbitLayer — orchestrates data fetching via WebSocket or REST.
  * ──────────────────────────────────────────────────────────────── */
 
 interface OrbitLayerProps {
@@ -82,6 +97,8 @@ interface OrbitLayerProps {
   onTelemetryUpdate?: (params: OrbitalParameters) => void;
   /** Callback to push satellite position (for camera follow). */
   onPositionUpdate?: (pos: [number, number, number]) => void;
+  /** Callback to push connection status to the HUD */
+  onConnectionChange?: (state: WsConnectionState) => void;
   /** Orbit line colour. @default "#00e5ff" */
   orbitColor?: string;
 }
@@ -91,9 +108,23 @@ function OrbitLayer({
   playback,
   onTelemetryUpdate,
   onPositionUpdate,
+  onConnectionChange,
   orbitColor = "#00e5ff",
 }: OrbitLayerProps) {
-  const [trajectory, setTrajectory] = useState<ScaledTrajectory | null>(
+  // ── WebSocket streaming ──────────────────────────────────────────
+  const ws = useOrbitWebSocket({
+    url: WS_URL,
+    params: ORBIT_PARAMS,
+    // Only connect if we aren't using an external trajectory
+    enabled: !externalTrajectory,
+  });
+
+  // Flow control: WebSockets try first. If we hit an error gracefully fall back.
+  const useFallback =
+    externalTrajectory !== undefined || ws.connectionState === "error";
+
+  // ── REST Fallback (existing behaviour) ───────────────────────────
+  const [restTrajectory, setRestTrajectory] = useState<ScaledTrajectory | null>(
     externalTrajectory ?? null,
   );
 
@@ -101,31 +132,60 @@ function OrbitLayer({
     if (externalTrajectory) return;
 
     try {
+      if (onConnectionChange) onConnectionChange("connecting");
       const response = await fetchOrbitSimulation({
-        initial_position: [7_000_000, 0, 0],
-        initial_velocity: [0, 7546, 0],
-        time_span: 5400,
-        time_step: 10,
+        ...ORBIT_PARAMS,
         max_points: 500,
         include_metadata: false,
       });
-      setTrajectory(scaleTrajectory(response));
+      setRestTrajectory(scaleTrajectory(response));
+      if (onConnectionChange) onConnectionChange("complete");
     } catch {
       console.warn("[OrbitLayer] Backend unavailable, using mock orbit data.");
-      setTrajectory(generateMockOrbit());
+      setRestTrajectory(generateMockOrbit());
+      if (onConnectionChange) onConnectionChange("error");
     }
-  }, [externalTrajectory]);
+  }, [externalTrajectory, onConnectionChange]);
 
   useEffect(() => {
-    loadOrbit();
-  }, [loadOrbit]);
+    if (useFallback) {
+      loadOrbit();
+    }
+  }, [useFallback, loadOrbit]);
 
-  if (!trajectory || trajectory.positions.length < 2) return null;
+  // Bubble up WebSocket state
+  useEffect(() => {
+    if (onConnectionChange && !useFallback) {
+      onConnectionChange(ws.connectionState);
+    }
+  }, [ws.connectionState, useFallback, onConnectionChange]);
+
+  // ── Render correct layer ─────────────────────────────────────────
+  if (useFallback) {
+    if (!restTrajectory || restTrajectory.positions.length < 2) return null;
+    return (
+      <AnimatedOrbit
+        trajectory={restTrajectory}
+        playback={playback}
+        orbitColor={orbitColor}
+        onTelemetryUpdate={onTelemetryUpdate}
+        onPositionUpdate={onPositionUpdate}
+      />
+    );
+  }
+
+  // If streaming but no data has arrived yet, don't bomb the scene
+  if (
+    ws.connectionState === "idle" ||
+    ws.connectionState === "connecting" ||
+    ws.trajectoryRef.current.length === 0
+  ) {
+    return null;
+  }
 
   return (
-    <AnimatedOrbit
-      trajectory={trajectory}
-      playback={playback}
+    <StreamedOrbit
+      ws={ws}
       orbitColor={orbitColor}
       onTelemetryUpdate={onTelemetryUpdate}
       onPositionUpdate={onPositionUpdate}
@@ -134,8 +194,151 @@ function OrbitLayer({
 }
 
 /* ────────────────────────────────────────────────────────────────
- * AnimatedOrbit — separated so the animation hook has guaranteed
- * access to a valid trajectory (no conditional hooks).
+ * StreamedOrbit — reads from WebSocket refs directly (no re-renders).
+ * ──────────────────────────────────────────────────────────────── */
+
+import { useFrame } from "@react-three/fiber";
+
+interface StreamedOrbitProps {
+  ws: ReturnType<typeof useOrbitWebSocket>;
+  orbitColor: string;
+  onTelemetryUpdate?: (params: OrbitalParameters) => void;
+  onPositionUpdate?: (pos: [number, number, number]) => void;
+}
+
+function StreamedOrbit({
+  ws,
+  orbitColor,
+  onTelemetryUpdate,
+  onPositionUpdate,
+}: StreamedOrbitProps) {
+  const telemetryRef = useRef(onTelemetryUpdate);
+  const posUpdateRef = useRef(onPositionUpdate);
+
+  useEffect(() => {
+    telemetryRef.current = onTelemetryUpdate;
+    posUpdateRef.current = onPositionUpdate;
+  }, [onTelemetryUpdate, onPositionUpdate]);
+
+  // We wrap the satellite in a group we control directly via ref.
+  // This completely eliminates React re-renders during playback!
+  const wrapperRef = useRef<THREE.Group>(null);
+
+  // Time-delayed playback buffer (e.g. 150ms delay)
+  const currentSimTimeRef = useRef(-1);
+
+  useFrame((_state, delta) => {
+    const buffer = ws.bufferRef.current;
+    if (buffer.length === 0) return;
+
+    // Adaptive Latency: Base 150ms real-time delay + 1.5x EWMA network latency
+    const latencyDelayMs = Math.max(150, ws.avgLatencyRef.current * 1.5);
+    
+    // Server ticked every 50ms providing 'time_step' (10s) simulation units
+    const SIM_SPEED = ORBIT_PARAMS.time_step / (50 / 1000); // typically 200x
+    const latencyDelaySim = (latencyDelayMs / 1000) * SIM_SPEED;
+
+    const latestServerTime = buffer[buffer.length - 1].serverTime;
+    const targetSimTime = latestServerTime - latencyDelaySim;
+
+    if (currentSimTimeRef.current === -1) {
+      currentSimTimeRef.current = targetSimTime;
+    }
+
+    // Advance playback head synchronized to Server Time + spring elasticity to prevent long-term drift
+    const timeSpring = (targetSimTime - currentSimTimeRef.current) * 2.0;
+    currentSimTimeRef.current += (delta * SIM_SPEED) + (timeSpring * delta);
+
+    const rTime = currentSimTimeRef.current;
+
+    let frame0 = buffer[0];
+    let frame1 = buffer[buffer.length - 1];
+
+    if (rTime <= frame0.serverTime) {
+      frame1 = frame0;
+    } else if (rTime >= frame1.serverTime) {
+      frame0 = frame1;
+    } else {
+      for (let i = buffer.length - 1; i > 0; i--) {
+        if (buffer[i - 1].serverTime <= rTime && rTime <= buffer[i].serverTime) {
+          frame0 = buffer[i - 1];
+          frame1 = buffer[i];
+          break;
+        }
+      }
+    }
+
+    let t = 0;
+    if (frame1.serverTime > frame0.serverTime) {
+      t = (rTime - frame0.serverTime) / (frame1.serverTime - frame0.serverTime);
+    }
+
+    // Linear interpolation for position
+    const x = frame0.position[0] + (frame1.position[0] - frame0.position[0]) * t;
+    const y = frame0.position[1] + (frame1.position[1] - frame0.position[1]) * t;
+    const z = frame0.position[2] + (frame1.position[2] - frame0.position[2]) * t;
+
+    // Apply native mutation to bypass React rendering costs
+    if (wrapperRef.current) {
+      wrapperRef.current.position.set(x, y, z);
+    }
+
+    if (posUpdateRef.current) {
+      posUpdateRef.current([x, y, z]);
+    }
+
+    if (telemetryRef.current) {
+      const dist = Math.sqrt(x ** 2 + y ** 2 + z ** 2);
+      const altitudeKm = (dist - 1) * 6371;
+
+      // Interpolate velocity
+      const vx = frame0.velocity[0] + (frame1.velocity[0] - frame0.velocity[0]) * t;
+      const vy = frame0.velocity[1] + (frame1.velocity[1] - frame0.velocity[1]) * t;
+      const vz = frame0.velocity[2] + (frame1.velocity[2] - frame0.velocity[2]) * t;
+      const velocityKmS = Math.sqrt(vx ** 2 + vy ** 2 + vz ** 2) * 6371;
+
+      // Interpolate progress/step
+      const currentStep = frame0.step + (frame1.step - frame0.step) * t;
+      const progress =
+        ws.totalStepsRef.current > 0
+          ? currentStep / ws.totalStepsRef.current
+          : 0;
+
+      telemetryRef.current({
+        altitudeKm: Math.max(0, altitudeKm),
+        velocityKmS: Math.abs(velocityKmS),
+        inclinationDeg: 51.6, // Hardware/params derived
+        periodMin: ORBIT_PARAMS.time_span / 60,
+        progress,
+      });
+    }
+  });
+
+  const positions = ws.trajectoryRef.current;
+  const orbitRadius =
+    positions.length > 0
+      ? Math.sqrt(
+          positions[0][0] ** 2 + positions[0][1] ** 2 + positions[0][2] ** 2,
+        )
+      : 1.063;
+
+  return (
+    <>
+      <OrbitPath
+        positions={positions}
+        currentIndex={positions.length - 1} // draw the whole growing line
+        color={orbitColor}
+      />
+      <group ref={wrapperRef}>
+        <Satellite position={[0, 0, 0]} />
+      </group>
+      <OrbitPlane orbitRadius={orbitRadius} />
+    </>
+  );
+}
+
+/* ────────────────────────────────────────────────────────────────
+ * AnimatedOrbit — existing REST/Mock fallback animation.
  * ──────────────────────────────────────────────────────────────── */
 
 interface AnimatedOrbitProps {
@@ -154,7 +357,9 @@ function AnimatedOrbit({
   onPositionUpdate,
 }: AnimatedOrbitProps) {
   const posUpdateRef = useRef(onPositionUpdate);
-  posUpdateRef.current = onPositionUpdate;
+  useEffect(() => {
+    posUpdateRef.current = onPositionUpdate;
+  }, [onPositionUpdate]);
 
   const { currentPosition, currentIndex } = useOrbitAnimation({
     positions: trajectory.positions,
@@ -166,13 +371,12 @@ function AnimatedOrbit({
     onTelemetryUpdate,
   });
 
-  // Push satellite position up for camera follow
-  // (done in the next frame to avoid re-render loops)
-  if (posUpdateRef.current) {
-    posUpdateRef.current(currentPosition);
-  }
+  useEffect(() => {
+    if (posUpdateRef.current) {
+      posUpdateRef.current(currentPosition);
+    }
+  }, [currentPosition]);
 
-  // Compute orbit radius for the inclination ring
   const orbitRadius =
     trajectory.positions.length > 0
       ? Math.sqrt(
@@ -207,6 +411,8 @@ interface SpaceSceneProps {
   playback?: OrbitPlaybackState;
   /** Callback to push telemetry to the HUD. */
   onTelemetryUpdate?: (params: OrbitalParameters) => void;
+  /** Callback to push connection state to the HUD. */
+  onConnectionChange?: (state: WsConnectionState) => void;
   /** Callback to push satellite position (for camera follow). */
   onPositionUpdate?: (pos: [number, number, number]) => void;
 }
@@ -214,6 +420,7 @@ interface SpaceSceneProps {
 export default function SpaceScene({
   playback = { paused: false, speed: 50, followCamera: false },
   onTelemetryUpdate,
+  onConnectionChange,
   onPositionUpdate,
 }: SpaceSceneProps) {
   // Store satellite position for camera follow
@@ -260,6 +467,7 @@ export default function SpaceScene({
         <OrbitLayer
           playback={playback}
           onTelemetryUpdate={onTelemetryUpdate}
+          onConnectionChange={onConnectionChange}
           onPositionUpdate={handlePositionUpdate}
         />
         <Stars
