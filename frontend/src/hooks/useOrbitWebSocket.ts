@@ -41,6 +41,7 @@ export interface BufferedFrame {
   position: [number, number, number];
   velocity: [number, number, number];
   localTime: number; 
+  serverTime: number;
   step: number;
 }
 
@@ -53,6 +54,8 @@ interface UseOrbitWebSocketReturn {
   trajectoryRef: React.RefObject<[number, number, number][]>;
   /** Buffer of recent frames with local timestamps for smooth interpolation. */
   bufferRef: React.RefObject<BufferedFrame[]>;
+  /** EWMA calculated network latency (jitter) in milliseconds. */
+  avgLatencyRef: React.RefObject<number>;
   /** Current connection state (for fallback logic). */
   connectionState: WsConnectionState;
   /** Manually reconnect. */
@@ -73,6 +76,9 @@ export function useOrbitWebSocket({
   enabled = true,
 }: UseOrbitWebSocketOptions): UseOrbitWebSocketReturn {
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimeoutRef = useRef<number | null>(null);
+
   const [connectionState, setConnectionState] =
     useState<WsConnectionState>("idle");
 
@@ -84,6 +90,10 @@ export function useOrbitWebSocket({
   const stepRef = useRef<number>(0);
   const totalStepsRef = useRef<number>(0);
 
+  // ── Adaptive Latency Tracking (EWMA) ─────────────────────────
+  const lastMsgLocalTimeRef = useRef(0);
+  const avgLatencyRef = useRef(50); // Guess initial 50ms interval
+
   // Keep params in a ref so the effect doesn't re-run on every render
   const paramsRef = useRef(params);
   useEffect(() => {
@@ -91,10 +101,16 @@ export function useOrbitWebSocket({
   }, [params]);
 
   const connect = useCallback(() => {
-    // Close any existing connection
+    // Close any existing connection cleanly without triggering reconnect logic
     if (wsRef.current) {
+      wsRef.current.onclose = null;
       wsRef.current.close();
       wsRef.current = null;
+    }
+
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
     }
 
     // Reset trajectory and buffer
@@ -102,16 +118,18 @@ export function useOrbitWebSocket({
     bufferRef.current = [];
     stepRef.current = 0;
     totalStepsRef.current = 0;
+    lastMsgLocalTimeRef.current = 0;
 
     setConnectionState("connecting");
 
     const ws = new WebSocket(url);
+    ws.binaryType = "arraybuffer"; // Important for binary frames
     wsRef.current = ws;
 
     ws.onopen = () => {
       setConnectionState("connected");
+      reconnectAttemptsRef.current = 0; // Reset backoff on success
 
-      // Send orbit parameters as first message
       const payload = {
         initial_position: paramsRef.current.initial_position,
         initial_velocity: paramsRef.current.initial_velocity,
@@ -123,106 +141,134 @@ export function useOrbitWebSocket({
 
     ws.onmessage = (event: MessageEvent) => {
       try {
-        const msg = JSON.parse(event.data as string) as WsOrbitMessage;
-
-        switch (msg.type) {
-          case "position_update": {
-            // Scale from SI metres → world units (Earth radius = 1)
-            const scaledPos: [number, number, number] = [
-              msg.position[0] / SCALE_FACTOR,
-              msg.position[1] / SCALE_FACTOR,
-              msg.position[2] / SCALE_FACTOR,
-            ];
-            const scaledVel: [number, number, number] = [
-              msg.velocity[0] / SCALE_FACTOR,
-              msg.velocity[1] / SCALE_FACTOR,
-              msg.velocity[2] / SCALE_FACTOR,
-            ];
-
-            // Update refs (no re-render)
-            latestPositionRef.current = scaledPos;
-            latestVelocityRef.current = scaledVel;
-            stepRef.current = msg.step;
-            totalStepsRef.current = msg.total_steps;
-
-            // Accumulate for interpolation buffer
-            bufferRef.current.push({
-              position: scaledPos,
-              velocity: scaledVel,
-              localTime: performance.now(),
-              step: msg.step,
-            });
-
-            // Prune buffer to keep only the last ~20 frames (1 second at 20Hz)
-            // It needs at least 2 frames for interpolation
-            if (bufferRef.current.length > 30) {
-              bufferRef.current.splice(0, bufferRef.current.length - 20);
-            }
-
-            // Accumulate for orbit trail
-            trajectoryRef.current.push(scaledPos);
-
-            // Set streaming state on first frame
-            if (msg.step === 0) {
-              setConnectionState("streaming");
-            }
-            break;
-          }
-
-          case "simulation_complete":
-            setConnectionState("complete");
-            break;
-
-          case "error":
+        // Handle JSON (used purely for Error messages now)
+        if (typeof event.data === "string") {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "error") {
             console.error("[useOrbitWebSocket] Server error:", msg.detail);
             setConnectionState("error");
-            break;
+          }
+          return;
+        }
+
+        // Handle Binary (Float32Array)
+        const floats = new Float32Array(event.data as ArrayBuffer);
+        const type = floats[0];
+
+        if (type === 1.0) {
+          // Simulation complete
+          setConnectionState("complete");
+          return;
+        }
+
+        if (type === 0.0) {
+          // Position update
+          const serverTime = floats[1];
+          const scaledPos: [number, number, number] = [
+            floats[2] / SCALE_FACTOR,
+            floats[3] / SCALE_FACTOR,
+            floats[4] / SCALE_FACTOR,
+          ];
+          const scaledVel: [number, number, number] = [
+            floats[5] / SCALE_FACTOR,
+            floats[6] / SCALE_FACTOR,
+            floats[7] / SCALE_FACTOR,
+          ];
+          const step = floats[8];
+          const totalSteps = floats[9];
+
+          // Adaptive latency math: difference between message arrival times
+          const now = performance.now();
+          if (lastMsgLocalTimeRef.current > 0) {
+            const dt = now - lastMsgLocalTimeRef.current;
+            // Exponential Smoothing (Alpha 0.1)
+            avgLatencyRef.current = avgLatencyRef.current * 0.9 + dt * 0.1;
+          }
+          lastMsgLocalTimeRef.current = now;
+
+          // Update latest refs
+          latestPositionRef.current = scaledPos;
+          latestVelocityRef.current = scaledVel;
+          stepRef.current = step;
+          totalStepsRef.current = totalSteps;
+
+          // Push into smart buffer
+          bufferRef.current.push({
+            position: scaledPos,
+            velocity: scaledVel,
+            localTime: now,
+            serverTime: serverTime,
+            step: step,
+          });
+
+          // Memory backpressure protection: Keep max 100 frames
+          if (bufferRef.current.length > 100) {
+            bufferRef.current.splice(0, bufferRef.current.length - 80); // Prune oldest 20
+          }
+
+          // Accumulate globally for orbit path drawing (decay / prune)
+          trajectoryRef.current.push(scaledPos);
+          if (trajectoryRef.current.length > 600) {
+            trajectoryRef.current.splice(0, trajectoryRef.current.length - 540); 
+          }
+
+          if (step === 0) setConnectionState("streaming");
         }
       } catch (err) {
-        console.error("[useOrbitWebSocket] Failed to parse message:", err);
+        console.error("[useOrbitWebSocket] Failed parsing frame:", err);
       }
     };
 
     ws.onerror = () => {
-      console.error("[useOrbitWebSocket] Connection error");
       setConnectionState("error");
     };
 
     ws.onclose = () => {
-      // Only set to closed if we weren't already in a terminal state
-      setConnectionState((prev) =>
-        prev === "complete" || prev === "error" ? prev : "closed",
-      );
       wsRef.current = null;
+      setConnectionState((prev) =>
+        prev === "complete" || prev === "error" ? prev : "closed"
+      );
+
+      // Automatic Exponential Backoff Reconnection (max 5 retries)
+      if (reconnectAttemptsRef.current < 5) {
+        const delay = Math.pow(2, reconnectAttemptsRef.current) * 1000;
+        console.log(`[useOrbitWebSocket] Reconnecting in ${delay}ms...`);
+        reconnectTimeoutRef.current = window.setTimeout(connect, delay) as unknown as number;
+        reconnectAttemptsRef.current++;
+      }
     };
   }, [url]);
 
   const disconnect = useCallback(() => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+    reconnectAttemptsRef.current = 999; // Prevent auto-reconnect
+    
     if (wsRef.current) {
+      wsRef.current.onclose = null; // Prevent close event acting
       wsRef.current.close();
       wsRef.current = null;
     }
     setConnectionState("closed");
   }, []);
 
-  // ── Auto-connect on mount / enabled change ───────────────────
   useEffect(() => {
     if (enabled) {
       connect();
     }
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
+      disconnect();
     };
-  }, [enabled, connect]);
+  }, [enabled, connect, disconnect]);
 
   return {
     latestPositionRef,
     latestVelocityRef,
     trajectoryRef,
     bufferRef,
+    avgLatencyRef,
     connectionState,
     reconnect: connect,
     disconnect,

@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import struct
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -46,17 +47,18 @@ class TestWebSocketStream:
             expected_steps = 11
             
             for i in range(expected_steps):
-                data = websocket.receive_json()
-                assert data["type"] == "position_update"
-                assert data["step"] == i
-                assert data["total_steps"] == expected_steps
-                assert isinstance(data["time"], float)
-                assert len(data["position"]) == 3
-                assert len(data["velocity"]) == 3
-
+                data = websocket.receive_bytes()
+                assert len(data) == 40, "Expected 40 bytes for position_update"
+                unpacked = struct.unpack('<10f', data)
+                
+                assert unpacked[0] == 0.0  # type
+                assert unpacked[8] == i    # step
+                assert unpacked[9] == expected_steps # total_steps
+                
             # Final message
-            final = websocket.receive_json()
-            assert final["type"] == "simulation_complete"
+            final = websocket.receive_bytes()
+            assert len(final) == 4, "Expected 4 bytes for simulation_complete"
+            assert struct.unpack('<f', final)[0] == 1.0
 
 
 class TestWebSocketValidation:
@@ -74,9 +76,10 @@ class TestWebSocketValidation:
             
             # The connection stays open; we can send valid params now
             websocket.send_json(VALID_WS_PAYLOAD)
-            first_frame = websocket.receive_json()
-            assert first_frame["type"] == "position_update"
-            assert first_frame["step"] == 0
+            first_frame = websocket.receive_bytes()
+            unpacked = struct.unpack('<10f', first_frame)
+            assert unpacked[0] == 0.0
+            assert unpacked[8] == 0.0
 
     def test_engine_rejection(self) -> None:
         """Send parameters that fail SI unit checks."""

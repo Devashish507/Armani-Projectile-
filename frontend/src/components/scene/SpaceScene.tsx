@@ -18,6 +18,7 @@ import {
   type ScaledTrajectory,
   type OrbitPlaybackState,
   type OrbitalParameters,
+  type WsConnectionState,
 } from "@/types/orbit";
 
 /* ────────────────────────────────────────────────────────────────
@@ -96,6 +97,8 @@ interface OrbitLayerProps {
   onTelemetryUpdate?: (params: OrbitalParameters) => void;
   /** Callback to push satellite position (for camera follow). */
   onPositionUpdate?: (pos: [number, number, number]) => void;
+  /** Callback to push connection status to the HUD */
+  onConnectionChange?: (state: WsConnectionState) => void;
   /** Orbit line colour. @default "#00e5ff" */
   orbitColor?: string;
 }
@@ -105,6 +108,7 @@ function OrbitLayer({
   playback,
   onTelemetryUpdate,
   onPositionUpdate,
+  onConnectionChange,
   orbitColor = "#00e5ff",
 }: OrbitLayerProps) {
   // ── WebSocket streaming ──────────────────────────────────────────
@@ -128,23 +132,33 @@ function OrbitLayer({
     if (externalTrajectory) return;
 
     try {
+      if (onConnectionChange) onConnectionChange("connecting");
       const response = await fetchOrbitSimulation({
         ...ORBIT_PARAMS,
         max_points: 500,
         include_metadata: false,
       });
       setRestTrajectory(scaleTrajectory(response));
+      if (onConnectionChange) onConnectionChange("complete");
     } catch {
       console.warn("[OrbitLayer] Backend unavailable, using mock orbit data.");
       setRestTrajectory(generateMockOrbit());
+      if (onConnectionChange) onConnectionChange("error");
     }
-  }, [externalTrajectory]);
+  }, [externalTrajectory, onConnectionChange]);
 
   useEffect(() => {
     if (useFallback) {
       loadOrbit();
     }
   }, [useFallback, loadOrbit]);
+
+  // Bubble up WebSocket state
+  useEffect(() => {
+    if (onConnectionChange && !useFallback) {
+      onConnectionChange(ws.connectionState);
+    }
+  }, [ws.connectionState, useFallback, onConnectionChange]);
 
   // ── Render correct layer ─────────────────────────────────────────
   if (useFallback) {
@@ -211,28 +225,42 @@ function StreamedOrbit({
   const wrapperRef = useRef<THREE.Group>(null);
 
   // Time-delayed playback buffer (e.g. 150ms delay)
-  const BUFFER_DELAY_MS = 150;
+  const currentSimTimeRef = useRef(-1);
 
-  useFrame(() => {
+  useFrame((_state, delta) => {
     const buffer = ws.bufferRef.current;
     if (buffer.length === 0) return;
 
-    // We want to render the state as it was BUFFER_DELAY_MS ago
-    const renderTime = performance.now() - BUFFER_DELAY_MS;
+    // Adaptive Latency: Base 150ms real-time delay + 1.5x EWMA network latency
+    const latencyDelayMs = Math.max(150, ws.avgLatencyRef.current * 1.5);
+    
+    // Server ticked every 50ms providing 'time_step' (10s) simulation units
+    const SIM_SPEED = ORBIT_PARAMS.time_step / (50 / 1000); // typically 200x
+    const latencyDelaySim = (latencyDelayMs / 1000) * SIM_SPEED;
+
+    const latestServerTime = buffer[buffer.length - 1].serverTime;
+    const targetSimTime = latestServerTime - latencyDelaySim;
+
+    if (currentSimTimeRef.current === -1) {
+      currentSimTimeRef.current = targetSimTime;
+    }
+
+    // Advance playback head synchronized to Server Time + spring elasticity to prevent long-term drift
+    const timeSpring = (targetSimTime - currentSimTimeRef.current) * 2.0;
+    currentSimTimeRef.current += (delta * SIM_SPEED) + (timeSpring * delta);
+
+    const rTime = currentSimTimeRef.current;
 
     let frame0 = buffer[0];
     let frame1 = buffer[buffer.length - 1];
 
-    if (renderTime <= frame0.localTime) {
-      // Not enough buffer yet, sit at the first frame
+    if (rTime <= frame0.serverTime) {
       frame1 = frame0;
-    } else if (renderTime >= frame1.localTime) {
-      // Drained buffer (lag spike), sit at the last frame
+    } else if (rTime >= frame1.serverTime) {
       frame0 = frame1;
     } else {
-      // Find the two frames spanning renderTime
       for (let i = buffer.length - 1; i > 0; i--) {
-        if (buffer[i - 1].localTime <= renderTime && renderTime <= buffer[i].localTime) {
+        if (buffer[i - 1].serverTime <= rTime && rTime <= buffer[i].serverTime) {
           frame0 = buffer[i - 1];
           frame1 = buffer[i];
           break;
@@ -240,10 +268,9 @@ function StreamedOrbit({
       }
     }
 
-    // Interpolation factor t: [0, 1]
     let t = 0;
-    if (frame1.localTime > frame0.localTime) {
-      t = (renderTime - frame0.localTime) / (frame1.localTime - frame0.localTime);
+    if (frame1.serverTime > frame0.serverTime) {
+      t = (rTime - frame0.serverTime) / (frame1.serverTime - frame0.serverTime);
     }
 
     // Linear interpolation for position
@@ -384,6 +411,8 @@ interface SpaceSceneProps {
   playback?: OrbitPlaybackState;
   /** Callback to push telemetry to the HUD. */
   onTelemetryUpdate?: (params: OrbitalParameters) => void;
+  /** Callback to push connection state to the HUD. */
+  onConnectionChange?: (state: WsConnectionState) => void;
   /** Callback to push satellite position (for camera follow). */
   onPositionUpdate?: (pos: [number, number, number]) => void;
 }
@@ -391,6 +420,7 @@ interface SpaceSceneProps {
 export default function SpaceScene({
   playback = { paused: false, speed: 50, followCamera: false },
   onTelemetryUpdate,
+  onConnectionChange,
   onPositionUpdate,
 }: SpaceSceneProps) {
   // Store satellite position for camera follow
@@ -437,6 +467,7 @@ export default function SpaceScene({
         <OrbitLayer
           playback={playback}
           onTelemetryUpdate={onTelemetryUpdate}
+          onConnectionChange={onConnectionChange}
           onPositionUpdate={handlePositionUpdate}
         />
         <Stars

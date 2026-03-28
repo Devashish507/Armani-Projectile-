@@ -78,23 +78,29 @@ async def ws_orbit(websocket: WebSocket) -> None:
                 r0 = np.array(params.initial_position, dtype=np.float64)
                 v0 = np.array(params.initial_velocity, dtype=np.float64)
 
+                import struct
+
                 async for frame in stream_orbit(
                     initial_position=r0,
                     initial_velocity=v0,
                     time_span=params.time_span,
                     time_step=params.time_step,
                 ):
-                    await websocket.send_json({
-                        "type": "position_update",
-                        "time": frame.time,
-                        "position": list(frame.position),
-                        "velocity": list(frame.velocity),
-                        "step": frame.step,
-                        "total_steps": frame.total_steps,
-                    })
+                    # Pack as Float32Array equivalent (little-endian)
+                    # [type(0.0), time, px, py, pz, vx, vy, vz, step, total_steps]
+                    packed = struct.pack(
+                        '<10f',
+                        0.0,
+                        float(frame.time),
+                        float(frame.position[0]), float(frame.position[1]), float(frame.position[2]),
+                        float(frame.velocity[0]), float(frame.velocity[1]), float(frame.velocity[2]),
+                        float(frame.step),
+                        float(frame.total_steps)
+                    )
+                    await websocket.send_bytes(packed)
 
                 # ── Simulation finished ─────────────────────────
-                await websocket.send_json({"type": "simulation_complete"})
+                await websocket.send_bytes(struct.pack('<f', 1.0))
                 logger.info("[ws:%s] Simulation complete", client_id)
 
             except (ValueError, RuntimeError) as exc:
