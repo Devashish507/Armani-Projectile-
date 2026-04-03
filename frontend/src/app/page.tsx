@@ -10,7 +10,7 @@
  *   │          │                        │  (300px) │
  *   │ Mission  │                        │ Controls │
  *   │ Params   │                        │ Telemetry│
- *   │          │                        │ Status   │
+ *   │          │                        │ Diags    │
  *   ├──────────┴────────────────────────┴──────────┤
  *   │              Status Bar                       │
  *   └───────────────────────────────────────────────┘
@@ -24,6 +24,7 @@ import { MissionProvider, useMission } from "@/context/MissionContext";
 import Sidebar from "@/components/dashboard/Sidebar";
 import ControlPanel from "@/components/dashboard/ControlPanel";
 import TelemetryPanel from "@/components/dashboard/TelemetryPanel";
+import DiagnosticsPanel from "@/components/dashboard/DiagnosticsPanel";
 import StatusBar from "@/components/dashboard/StatusBar";
 import { Separator } from "@/components/ui/separator";
 
@@ -68,10 +69,12 @@ function DashboardLayout() {
   const {
     params,
     playback,
+    cameraMode,
     simulationActive,
     simulationKey,
     setTelemetry,
     setWsStatus,
+    setDiagnosticsRef,
   } = useMission();
 
   return (
@@ -97,14 +100,16 @@ function DashboardLayout() {
           <SpaceScene
             key={simulationKey}
             playback={playback}
+            cameraMode={cameraMode}
             orbitParams={params}
             simulationActive={simulationActive}
             onTelemetryUpdate={setTelemetry}
             onConnectionChange={setWsStatus}
+            onDiagnosticsReady={setDiagnosticsRef}
           />
         </div>
 
-        {/* RIGHT — Controls + Telemetry Panel */}
+        {/* RIGHT — Controls + Telemetry + Diagnostics Panel */}
         <aside className="w-[300px] flex flex-col bg-black/40 border-l border-white/[0.06]
                           backdrop-blur-xl overflow-y-auto custom-scrollbar">
           {/* Panel Header */}
@@ -131,8 +136,15 @@ function DashboardLayout() {
           <Separator className="bg-white/[0.06] mx-4" />
 
           {/* Telemetry Section */}
-          <div className="px-4 py-4 flex-1">
+          <div className="px-4 py-4">
             <TelemetryPanel />
+          </div>
+
+          <Separator className="bg-white/[0.06] mx-4" />
+
+          {/* Diagnostics Section (#11, #12) */}
+          <div className="px-4 py-4 flex-1">
+            <DiagnosticsPanel />
           </div>
         </aside>
       </div>

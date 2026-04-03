@@ -19,6 +19,8 @@ import {
   type OrbitPlaybackState,
   type OrbitalParameters,
   type WsConnectionState,
+  type CameraMode,
+  type ConnectionDiagnostics,
 } from "@/types/orbit";
 
 /* ────────────────────────────────────────────────────────────────
@@ -111,6 +113,8 @@ interface OrbitLayerProps {
   onPositionUpdate?: (pos: [number, number, number]) => void;
   /** Callback to push connection status to the HUD */
   onConnectionChange?: (state: WsConnectionState) => void;
+  /** Callback to wire diagnostics ref */
+  onDiagnosticsReady?: (ref: React.RefObject<ConnectionDiagnostics>) => void;
   /** Orbit line colour. @default "#00e5ff" */
   orbitColor?: string;
 }
@@ -123,6 +127,7 @@ function OrbitLayer({
   onTelemetryUpdate,
   onPositionUpdate,
   onConnectionChange,
+  onDiagnosticsReady,
   orbitColor = "#00e5ff",
 }: OrbitLayerProps) {
   // ── WebSocket streaming ──────────────────────────────────────────
@@ -132,6 +137,13 @@ function OrbitLayer({
     // Only connect if simulation is active and no external trajectory
     enabled: simulationActive && !externalTrajectory,
   });
+
+  // Wire diagnostics ref up to dashboard
+  useEffect(() => {
+    if (onDiagnosticsReady && ws.diagnosticsRef) {
+      onDiagnosticsReady(ws.diagnosticsRef);
+    }
+  }, [onDiagnosticsReady, ws.diagnosticsRef]);
 
   // Flow control: WebSockets try first. If we hit an error gracefully fall back.
   const useFallback =
@@ -286,14 +298,27 @@ function StreamedOrbit({
     }
 
     let t = 0;
-    if (frame1.serverTime > frame0.serverTime) {
-      t = (rTime - frame0.serverTime) / (frame1.serverTime - frame0.serverTime);
+    const dt = frame1.serverTime - frame0.serverTime;
+    if (dt > 0) {
+      t = (rTime - frame0.serverTime) / dt;
     }
 
-    // Linear interpolation for position
-    const x = frame0.position[0] + (frame1.position[0] - frame0.position[0]) * t;
-    const y = frame0.position[1] + (frame1.position[1] - frame0.position[1]) * t;
-    const z = frame0.position[2] + (frame1.position[2] - frame0.position[2]) * t;
+    // Hermite interpolation using velocity for trajectory-aware prediction (#7)
+    // h(t) = (2t³ - 3t² + 1)p0 + (t³ - 2t² + t)m0 + (-2t³ + 3t² )p1 + (t³ - t²)m1
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const h00 = 2 * t3 - 3 * t2 + 1;
+    const h10 = t3 - 2 * t2 + t;
+    const h01 = -2 * t3 + 3 * t2;
+    const h11 = t3 - t2;
+
+    // Scale velocity tangents by the time interval for proper Hermite form
+    const x = h00 * frame0.position[0] + h10 * frame0.velocity[0] * dt
+            + h01 * frame1.position[0] + h11 * frame1.velocity[0] * dt;
+    const y = h00 * frame0.position[1] + h10 * frame0.velocity[1] * dt
+            + h01 * frame1.position[1] + h11 * frame1.velocity[1] * dt;
+    const z = h00 * frame0.position[2] + h10 * frame0.velocity[2] * dt
+            + h01 * frame1.position[2] + h11 * frame1.velocity[2] * dt;
 
     // Apply native mutation to bypass React rendering costs
     if (wrapperRef.current) {
@@ -426,6 +451,8 @@ function AnimatedOrbit({
 interface SpaceSceneProps {
   /** Playback controls from the HUD. */
   playback?: OrbitPlaybackState;
+  /** Active camera mode. */
+  cameraMode?: CameraMode;
   /** Dynamic orbit parameters. */
   orbitParams?: OrbitParams;
   /** Whether the simulation is currently active. */
@@ -436,15 +463,19 @@ interface SpaceSceneProps {
   onConnectionChange?: (state: WsConnectionState) => void;
   /** Callback to push satellite position (for camera follow). */
   onPositionUpdate?: (pos: [number, number, number]) => void;
+  /** Callback to wire diagnostics ref from WS hook to the dashboard. */
+  onDiagnosticsReady?: (ref: React.RefObject<ConnectionDiagnostics>) => void;
 }
 
 export default function SpaceScene({
   playback = { paused: false, speed: 50, followCamera: false },
+  cameraMode = "orbit",
   orbitParams = DEFAULT_ORBIT_PARAMS,
   simulationActive = true,
   onTelemetryUpdate,
   onConnectionChange,
   onPositionUpdate,
+  onDiagnosticsReady,
 }: SpaceSceneProps) {
   // Store satellite position for camera follow
   const [satPos, setSatPos] = useState<[number, number, number]>([0, 0, 0]);
@@ -494,6 +525,7 @@ export default function SpaceScene({
           onTelemetryUpdate={onTelemetryUpdate}
           onConnectionChange={onConnectionChange}
           onPositionUpdate={handlePositionUpdate}
+          onDiagnosticsReady={onDiagnosticsReady}
         />
         <Stars
           radius={100}
@@ -508,7 +540,7 @@ export default function SpaceScene({
 
       {/* ── Controls ────────────────────────────────────────── */}
       <CameraController
-        followSatellite={playback.followCamera}
+        cameraMode={cameraMode}
         satellitePosition={satPos}
       />
       <Preload all />

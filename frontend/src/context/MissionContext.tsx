@@ -9,8 +9,8 @@
  * be trivially migrated to Zustand.
  *
  * State is split into two conceptual groups:
- *   1. User-authored  — params, playback controls
- *   2. System-derived — telemetry, WS status (written by scene/hooks)
+ *   1. User-authored  — params, playback controls, camera mode
+ *   2. System-derived — telemetry, WS status, diagnostics (written by scene/hooks)
  */
 
 import {
@@ -25,7 +25,10 @@ import type {
   OrbitalParameters,
   OrbitPlaybackState,
   WsConnectionState,
+  CameraMode,
+  ConnectionDiagnostics,
 } from "@/types/orbit";
+import { PROTOCOL_VERSION } from "@/types/orbit";
 
 // ── Param types ────────────────────────────────────────────────────
 
@@ -56,9 +59,13 @@ interface MissionContextValue {
   setSpeed: (s: number) => void;
   toggleFollow: () => void;
 
+  // ── Camera mode (#14) ────────────────────────────────────────────
+  cameraMode: CameraMode;
+  setCameraMode: (m: CameraMode) => void;
+
   // ── Simulation lifecycle ─────────────────────────────────────────
   simulationActive: boolean;
-  simulationKey: number; // increment to force remount/reconnect
+  simulationKey: number;
   startSimulation: () => void;
   pauseSimulation: () => void;
   resetSimulation: () => void;
@@ -69,6 +76,10 @@ interface MissionContextValue {
 
   wsStatus: WsConnectionState;
   setWsStatus: (s: WsConnectionState) => void;
+
+  // ── Connection diagnostics (#11, #12) ────────────────────────────
+  diagnostics: ConnectionDiagnostics;
+  setDiagnosticsRef: (ref: React.RefObject<ConnectionDiagnostics>) => void;
 }
 
 const MissionContext = createContext<MissionContextValue | null>(null);
@@ -84,6 +95,8 @@ export function MissionProvider({ children }: { children: ReactNode }) {
     followCamera: false,
   });
 
+  const [cameraMode, setCameraMode] = useState<CameraMode>("orbit");
+
   const [simulationActive, setSimulationActive] = useState(true);
   const [simulationKey, setSimulationKey] = useState(0);
 
@@ -96,6 +109,33 @@ export function MissionProvider({ children }: { children: ReactNode }) {
   });
 
   const [wsStatus, setWsStatus] = useState<WsConnectionState>("idle");
+
+  // Diagnostics — stored as a ref pointer for zero-copy reads from the WS hook
+  const defaultDiagnostics: ConnectionDiagnostics = {
+    latencyMs: 50,
+    packetsPerSec: 0,
+    bufferDepth: 0,
+    droppedFrames: 0,
+    protocolVersion: PROTOCOL_VERSION,
+    latencyHistory: [],
+  };
+  const diagnosticsRefInternal = useRef<ConnectionDiagnostics>(defaultDiagnostics);
+  const [diagnostics, setDiagnosticsState] = useState<ConnectionDiagnostics>(defaultDiagnostics);
+
+  // Poll the diagnostics ref at ~4 Hz to update React state
+  const diagPollRef = useRef<number | null>(null);
+  const setDiagnosticsRef = useCallback(
+    (ref: React.RefObject<ConnectionDiagnostics>) => {
+      diagnosticsRefInternal.current = ref.current;
+      if (diagPollRef.current) clearInterval(diagPollRef.current);
+      diagPollRef.current = window.setInterval(() => {
+        if (ref.current) {
+          setDiagnosticsState({ ...ref.current });
+        }
+      }, 250) as unknown as number;
+    },
+    [],
+  );
 
   // Throttle telemetry updates to ~10 Hz to avoid cascading re-renders
   const lastUpdate = useRef(0);
@@ -118,7 +158,10 @@ export function MissionProvider({ children }: { children: ReactNode }) {
     [],
   );
   const toggleFollow = useCallback(
-    () => setPlayback((p) => ({ ...p, followCamera: !p.followCamera })),
+    () => {
+      setPlayback((p) => ({ ...p, followCamera: !p.followCamera }));
+      setCameraMode((m) => (m === "follow" ? "orbit" : "follow"));
+    },
     [],
   );
 
@@ -154,6 +197,8 @@ export function MissionProvider({ children }: { children: ReactNode }) {
         togglePause,
         setSpeed,
         toggleFollow,
+        cameraMode,
+        setCameraMode,
         simulationActive,
         simulationKey,
         startSimulation,
@@ -163,6 +208,8 @@ export function MissionProvider({ children }: { children: ReactNode }) {
         setTelemetry,
         wsStatus,
         setWsStatus,
+        diagnostics,
+        setDiagnosticsRef,
       }}
     >
       {children}

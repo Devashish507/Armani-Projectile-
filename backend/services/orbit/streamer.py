@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 class OrbitFrame:
     """Single simulation frame sent to the client."""
 
+    seq_id: int
     step: int
     total_steps: int
     time: float
@@ -95,6 +96,7 @@ async def stream_orbit(
     # ── Yield frames one at a time ──────────────────────────────
     for i in range(total_steps):
         frame = OrbitFrame(
+            seq_id=i,
             step=i,
             total_steps=total_steps,
             time=float(result.time[i]),

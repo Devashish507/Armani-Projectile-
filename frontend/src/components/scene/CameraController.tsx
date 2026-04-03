@@ -4,15 +4,17 @@ import { useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
+import type { CameraMode } from "@/types/orbit";
 
 /* ────────────────────────────────────────────────────────────────
- * CameraController — orbit controls + cinematic intro + follow mode.
+ * CameraController — orbit controls + cinematic intro + 3 camera modes.
  *
- * Upgrades:
- *   • Satellite follow mode — camera smoothly lerps to an offset
- *     behind/above the satellite and tracks it
- *   • Toggle off → returns to default Earth-centered view
- *   • Intro zoom preserved
+ * Camera Modes (#14):
+ *   • "orbit"  — Earth-centered orbit controls, default view
+ *   • "follow" — Camera smoothly lerps behind/above the satellite
+ *   • "free"   — Full 6DOF, unlocked pan/zoom/rotate, no constraints
+ *
+ * Smooth transitions between modes (lerp over ~1.5s).
  * ──────────────────────────────────────────────────────────────── */
 
 interface CameraControllerProps {
@@ -22,8 +24,8 @@ interface CameraControllerProps {
   maxDistance?: number;
   /** Target position after the intro animation. */
   targetPosition?: [number, number, number];
-  /** Whether camera follow mode is active. */
-  followSatellite?: boolean;
+  /** Active camera mode. */
+  cameraMode?: CameraMode;
   /** Current satellite position to follow. */
   satellitePosition?: [number, number, number];
 }
@@ -32,7 +34,7 @@ export default function CameraController({
   minDistance = 1.5,
   maxDistance = 12,
   targetPosition = [0, 0, 3],
-  followSatellite = false,
+  cameraMode = "orbit",
   satellitePosition = [0, 0, 0],
 }: CameraControllerProps) {
   const introComplete = useRef(false);
@@ -45,7 +47,23 @@ export default function CameraController({
   const camTarget = useRef(new THREE.Vector3());
   const defaultPos = useRef(new THREE.Vector3(...targetPosition));
 
-  useFrame(() => {
+  // Transition tracking
+  const prevMode = useRef<CameraMode>(cameraMode);
+  const transitionProgress = useRef(1); // 1 = transition complete
+
+  useFrame((_state, delta) => {
+    // ── Track mode transitions ───────────────────────────────
+    if (cameraMode !== prevMode.current) {
+      prevMode.current = cameraMode;
+      transitionProgress.current = 0;
+    }
+    if (transitionProgress.current < 1) {
+      transitionProgress.current = Math.min(1, transitionProgress.current + delta * 0.7);
+    }
+
+    // Smooth factor increases as transition completes
+    const lerpFactor = 0.03 + transitionProgress.current * 0.03;
+
     // ── Intro zoom ──────────────────────────────────────────
     if (!introComplete.current) {
       camera.position.lerp(target.current, 0.025);
@@ -53,41 +71,57 @@ export default function CameraController({
         camera.position.copy(target.current);
         introComplete.current = true;
       }
-      return; // skip follow logic during intro
+      return;
     }
 
-    // ── Follow mode ─────────────────────────────────────────
-    if (followSatellite && introComplete.current) {
-      satVec.current.set(
-        satellitePosition[0],
-        satellitePosition[1],
-        satellitePosition[2],
-      );
+    // ── Mode-specific camera behaviour ──────────────────────
+    switch (cameraMode) {
+      case "follow": {
+        satVec.current.set(
+          satellitePosition[0],
+          satellitePosition[1],
+          satellitePosition[2],
+        );
 
-      // Camera offset: slightly behind and above the satellite
-      // (relative to satellite's direction from Earth center)
-      const dir = satVec.current.clone().normalize();
-      const up = new THREE.Vector3(0, 1, 0);
-      const side = new THREE.Vector3().crossVectors(dir, up).normalize();
+        // Camera offset: behind and above the satellite
+        const dir = satVec.current.clone().normalize();
+        const up = new THREE.Vector3(0, 1, 0);
+        const side = new THREE.Vector3().crossVectors(dir, up).normalize();
 
-      camTarget.current
-        .copy(satVec.current)
-        .add(dir.multiplyScalar(0.6))     // pull back from satellite
-        .add(up.multiplyScalar(0.3))       // slightly above
-        .add(side.multiplyScalar(0.2));    // slightly to the side
+        camTarget.current
+          .copy(satVec.current)
+          .add(dir.multiplyScalar(0.6))
+          .add(up.multiplyScalar(0.3))
+          .add(side.multiplyScalar(0.2));
 
-      camera.position.lerp(camTarget.current, 0.04);
+        camera.position.lerp(camTarget.current, lerpFactor + 0.01);
 
-      // Point OrbitControls target at satellite
-      if (controlsRef.current) {
-        const ctrl = controlsRef.current as unknown as { target: THREE.Vector3 };
-        ctrl.target.lerp(satVec.current, 0.06);
+        if (controlsRef.current) {
+          const ctrl = controlsRef.current as unknown as { target: THREE.Vector3 };
+          ctrl.target.lerp(satVec.current, lerpFactor + 0.03);
+        }
+        break;
       }
-    } else if (introComplete.current) {
-      // ── Return to default view when follow is off ─────────
-      if (controlsRef.current) {
-        const ctrl = controlsRef.current as unknown as { target: THREE.Vector3 };
-        ctrl.target.lerp(new THREE.Vector3(0, 0, 0), 0.03);
+
+      case "free": {
+        // Free mode: no constraints, just let orbit controls handle everything
+        // Smoothly release any target lock
+        if (controlsRef.current) {
+          const ctrl = controlsRef.current as unknown as { target: THREE.Vector3 };
+          // Don't force any position — let user control freely
+          // Just damp any existing momentum
+        }
+        break;
+      }
+
+      case "orbit":
+      default: {
+        // Return to default Earth-centered view
+        if (controlsRef.current) {
+          const ctrl = controlsRef.current as unknown as { target: THREE.Vector3 };
+          ctrl.target.lerp(new THREE.Vector3(0, 0, 0), lerpFactor);
+        }
+        break;
       }
     }
   });
@@ -97,13 +131,13 @@ export default function CameraController({
       ref={controlsRef}
       enableDamping
       dampingFactor={0.06}
-      minDistance={minDistance}
-      maxDistance={maxDistance}
-      enablePan={true}
+      minDistance={cameraMode === "free" ? 0.5 : minDistance}
+      maxDistance={cameraMode === "free" ? 50 : maxDistance}
+      enablePan={cameraMode !== "follow"}
       enableRotate={true}
       enableZoom={true}
-      minPolarAngle={0.1}
-      maxPolarAngle={Math.PI * 0.95}
+      minPolarAngle={cameraMode === "free" ? 0 : 0.1}
+      maxPolarAngle={cameraMode === "free" ? Math.PI : Math.PI * 0.95}
     />
   );
 }

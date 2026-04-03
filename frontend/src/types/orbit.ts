@@ -4,6 +4,17 @@
  * All backend values are in SI units (metres, m/s, seconds).
  * Use SCALE_FACTOR to convert metres → scene world units where
  * Earth radius = 1 world unit.
+ *
+ * Protocol v1 Binary Frame Layout:
+ *   Position update (52 bytes):
+ *     [version:f32, type:f32, seq:f32, time:f64,
+ *      px:f32, py:f32, pz:f32, vx:f32, vy:f32, vz:f32,
+ *      step:f32, total_steps:f32]
+ *
+ *   Control frame (12 bytes):
+ *     [version:f32, type:f32, payload:f32]
+ *
+ *   Type markers: 0.0 = position_update, 1.0 = complete, 2.0 = heartbeat
  */
 
 // ── Scale ──────────────────────────────────────────────────────────
@@ -16,6 +27,17 @@ export const EARTH_RADIUS_M = 6_371_000;
  * Earth radius = 1 world unit in the scene.
  */
 export const SCALE_FACTOR = EARTH_RADIUS_M;
+
+// ── Protocol Constants ─────────────────────────────────────────────
+
+/** Current binary protocol version. */
+export const PROTOCOL_VERSION = 1;
+
+/** Size of a position update frame in bytes. */
+export const FRAME_SIZE_POSITION = 52;
+
+/** Size of a control frame (complete/heartbeat) in bytes. */
+export const FRAME_SIZE_CONTROL = 12;
 
 // ── Request ────────────────────────────────────────────────────────
 
@@ -76,6 +98,11 @@ export interface OrbitPlaybackState {
   followCamera: boolean;
 }
 
+// ── Camera modes ───────────────────────────────────────────────────
+
+/** Camera positioning modes. */
+export type CameraMode = "orbit" | "follow" | "free";
+
 // ── Live telemetry ─────────────────────────────────────────────────
 
 export interface OrbitalParameters {
@@ -91,11 +118,31 @@ export interface OrbitalParameters {
   progress: number;
 }
 
+// ── Connection diagnostics ─────────────────────────────────────────
+
+/** Real-time connection health metrics. */
+export interface ConnectionDiagnostics {
+  /** EWMA network latency in ms. */
+  latencyMs: number;
+  /** Rolling packets per second. */
+  packetsPerSec: number;
+  /** Current interpolation buffer depth. */
+  bufferDepth: number;
+  /** Cumulative out-of-order/dropped frame count. */
+  droppedFrames: number;
+  /** Protocol version received from server. */
+  protocolVersion: number;
+  /** Last 60 latency samples for sparkline rendering. */
+  latencyHistory: number[];
+}
+
 // ── WebSocket message types ────────────────────────────────────────
 
-/** Single position frame received over the WebSocket. */
+/** Single position frame received over the WebSocket (v1 protocol). */
 export interface WsPositionUpdate {
   type: "position_update";
+  version: number;
+  seq: number;
   time: number;
   position: [number, number, number];
   velocity: [number, number, number];
@@ -106,16 +153,29 @@ export interface WsPositionUpdate {
 /** End-of-stream marker. */
 export interface WsSimulationComplete {
   type: "simulation_complete";
+  version: number;
+  seq: number;
 }
 
-/** Server-side error. */
+/** Server heartbeat ping. */
+export interface WsHeartbeat {
+  type: "heartbeat";
+  version: number;
+  serverTime: number;
+}
+
+/** Server-side error (JSON). */
 export interface WsError {
   type: "error";
   detail: string;
 }
 
 /** Discriminated union of all incoming WebSocket messages. */
-export type WsOrbitMessage = WsPositionUpdate | WsSimulationComplete | WsError;
+export type WsOrbitMessage =
+  | WsPositionUpdate
+  | WsSimulationComplete
+  | WsHeartbeat
+  | WsError;
 
 /** WebSocket connection lifecycle states. */
 export type WsConnectionState =
@@ -126,4 +186,3 @@ export type WsConnectionState =
   | "complete"
   | "error"
   | "closed";
-
