@@ -72,11 +72,19 @@ function scaleTrajectory(data: OrbitSimulationResponse): ScaledTrajectory {
 
 import { useOrbitWebSocket } from "@/hooks/useOrbitWebSocket";
 
-// ── Shared configuration ──────────────────────────────────────────
+// ── Configuration ─────────────────────────────────────────────────
 
-const ORBIT_PARAMS = {
-  initial_position: [7_000_000, 0, 0] as [number, number, number],
-  initial_velocity: [0, 7546, 0] as [number, number, number],
+export interface OrbitParams {
+  initial_position: [number, number, number];
+  initial_velocity: [number, number, number];
+  time_span: number;
+  time_step: number;
+}
+
+/** Default ISS-like LEO orbit used when no params are supplied. */
+const DEFAULT_ORBIT_PARAMS: OrbitParams = {
+  initial_position: [7_000_000, 0, 0],
+  initial_velocity: [0, 7546, 0],
   time_span: 5400,
   time_step: 10,
 };
@@ -93,6 +101,10 @@ interface OrbitLayerProps {
   trajectory?: ScaledTrajectory;
   /** Playback state from the HUD. */
   playback: OrbitPlaybackState;
+  /** Dynamic orbit parameters from the sidebar. */
+  orbitParams: OrbitParams;
+  /** Whether the simulation is active. */
+  simulationActive: boolean;
   /** Callback to push telemetry to the HUD. */
   onTelemetryUpdate?: (params: OrbitalParameters) => void;
   /** Callback to push satellite position (for camera follow). */
@@ -106,6 +118,8 @@ interface OrbitLayerProps {
 function OrbitLayer({
   trajectory: externalTrajectory,
   playback,
+  orbitParams,
+  simulationActive,
   onTelemetryUpdate,
   onPositionUpdate,
   onConnectionChange,
@@ -114,9 +128,9 @@ function OrbitLayer({
   // ── WebSocket streaming ──────────────────────────────────────────
   const ws = useOrbitWebSocket({
     url: WS_URL,
-    params: ORBIT_PARAMS,
-    // Only connect if we aren't using an external trajectory
-    enabled: !externalTrajectory,
+    params: orbitParams,
+    // Only connect if simulation is active and no external trajectory
+    enabled: simulationActive && !externalTrajectory,
   });
 
   // Flow control: WebSockets try first. If we hit an error gracefully fall back.
@@ -134,7 +148,7 @@ function OrbitLayer({
     try {
       if (onConnectionChange) onConnectionChange("connecting");
       const response = await fetchOrbitSimulation({
-        ...ORBIT_PARAMS,
+        ...orbitParams,
         max_points: 500,
         include_metadata: false,
       });
@@ -145,7 +159,7 @@ function OrbitLayer({
       setRestTrajectory(generateMockOrbit());
       if (onConnectionChange) onConnectionChange("error");
     }
-  }, [externalTrajectory, onConnectionChange]);
+  }, [externalTrajectory, onConnectionChange, orbitParams]);
 
   useEffect(() => {
     if (useFallback) {
@@ -186,6 +200,7 @@ function OrbitLayer({
   return (
     <StreamedOrbit
       ws={ws}
+      orbitParams={orbitParams}
       orbitColor={orbitColor}
       onTelemetryUpdate={onTelemetryUpdate}
       onPositionUpdate={onPositionUpdate}
@@ -201,6 +216,7 @@ import { useFrame } from "@react-three/fiber";
 
 interface StreamedOrbitProps {
   ws: ReturnType<typeof useOrbitWebSocket>;
+  orbitParams: OrbitParams;
   orbitColor: string;
   onTelemetryUpdate?: (params: OrbitalParameters) => void;
   onPositionUpdate?: (pos: [number, number, number]) => void;
@@ -208,6 +224,7 @@ interface StreamedOrbitProps {
 
 function StreamedOrbit({
   ws,
+  orbitParams,
   orbitColor,
   onTelemetryUpdate,
   onPositionUpdate,
@@ -234,8 +251,8 @@ function StreamedOrbit({
     // Adaptive Latency: Base 150ms real-time delay + 1.5x EWMA network latency
     const latencyDelayMs = Math.max(150, ws.avgLatencyRef.current * 1.5);
     
-    // Server ticked every 50ms providing 'time_step' (10s) simulation units
-    const SIM_SPEED = ORBIT_PARAMS.time_step / (50 / 1000); // typically 200x
+    // Server ticked every 50ms providing 'time_step' simulation units
+    const SIM_SPEED = orbitParams.time_step / (50 / 1000); // typically 200x
     const latencyDelaySim = (latencyDelayMs / 1000) * SIM_SPEED;
 
     const latestServerTime = buffer[buffer.length - 1].serverTime;
@@ -307,8 +324,8 @@ function StreamedOrbit({
       telemetryRef.current({
         altitudeKm: Math.max(0, altitudeKm),
         velocityKmS: Math.abs(velocityKmS),
-        inclinationDeg: 51.6, // Hardware/params derived
-        periodMin: ORBIT_PARAMS.time_span / 60,
+        inclinationDeg: 51.6, // Derived from initial conditions
+        periodMin: orbitParams.time_span / 60,
         progress,
       });
     }
@@ -409,6 +426,10 @@ function AnimatedOrbit({
 interface SpaceSceneProps {
   /** Playback controls from the HUD. */
   playback?: OrbitPlaybackState;
+  /** Dynamic orbit parameters. */
+  orbitParams?: OrbitParams;
+  /** Whether the simulation is currently active. */
+  simulationActive?: boolean;
   /** Callback to push telemetry to the HUD. */
   onTelemetryUpdate?: (params: OrbitalParameters) => void;
   /** Callback to push connection state to the HUD. */
@@ -419,6 +440,8 @@ interface SpaceSceneProps {
 
 export default function SpaceScene({
   playback = { paused: false, speed: 50, followCamera: false },
+  orbitParams = DEFAULT_ORBIT_PARAMS,
+  simulationActive = true,
   onTelemetryUpdate,
   onConnectionChange,
   onPositionUpdate,
@@ -466,6 +489,8 @@ export default function SpaceScene({
         <Earth />
         <OrbitLayer
           playback={playback}
+          orbitParams={orbitParams}
+          simulationActive={simulationActive}
           onTelemetryUpdate={onTelemetryUpdate}
           onConnectionChange={onConnectionChange}
           onPositionUpdate={handlePositionUpdate}
