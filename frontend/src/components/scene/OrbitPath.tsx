@@ -11,8 +11,8 @@ import * as THREE from "three";
  * Visual upgrades:
  *   • Fat lines (Line2) — screen-space thickness that stays
  *     visible at any zoom level
- *   • Motion trail — vertex-color gradient that brightens near
- *     the satellite and fades in the "wake" region
+ *   • Alpha-gradient trail fading (#8) — older points fade to
+ *     full transparency for a cinematic comet-tail effect
  *   • Earth-shadow dimming — points behind Earth get darker
  *   • Dual-layer glow — bright core + transparent halo
  * ──────────────────────────────────────────────────────────────── */
@@ -50,16 +50,26 @@ export default function OrbitPath({
 
   const baseRgb = useMemo(() => hexToRgb(color), [color]);
 
-  // ── Compute vertex colours with motion trail + Earth shadow ─
-  const vertexColors = useMemo(() => {
+  // ── Compute vertex colours with alpha-gradient trail fading + Earth shadow ─
+  const { coreColors, coreOpacities, glowColors, glowOpacities } = useMemo(() => {
     const n = positions.length;
-    if (n === 0) return [];
+    if (n === 0) {
+      return {
+        coreColors: [] as [number, number, number][],
+        coreOpacities: [] as number[],
+        glowColors: [] as [number, number, number][],
+        glowOpacities: [] as number[],
+      };
+    }
 
     const camDir = new THREE.Vector3()
       .copy(camera.position)
       .normalize();
 
-    const colors: [number, number, number][] = [];
+    const core: [number, number, number][] = [];
+    const coreAlpha: number[] = [];
+    const glow: [number, number, number][] = [];
+    const glowAlpha: number[] = [];
 
     for (let i = 0; i < n; i++) {
       // Wrap-aware distance from satellite
@@ -69,10 +79,18 @@ export default function OrbitPath({
       // Trail: bright near satellite → fades behind
       const trailLength = n * 0.7;
       let brightness: number;
+      let alpha: number;
+
       if (dist <= trailLength) {
-        brightness = 1.0 - (dist / trailLength) * 0.75;
+        const ratio = dist / trailLength;
+        brightness = 1.0 - ratio * 0.6;
+        // Alpha fading (#8) — smooth ease-out curve
+        alpha = 1.0 - Math.pow(ratio, 1.8) * 0.85;
       } else {
         brightness = 0.15;
+        // Far tail fades to near-invisible
+        const tailRatio = (dist - trailLength) / (n - trailLength);
+        alpha = Math.max(0.03, 0.15 - tailRatio * 0.15);
       }
 
       // Earth-shadow: dim points on the far side from camera
@@ -80,38 +98,53 @@ export default function OrbitPath({
       const ptDir = new THREE.Vector3(pos[0], pos[1], pos[2]).normalize();
       const dot = camDir.dot(ptDir);
       if (dot < -0.1) {
-        brightness *= Math.max(0.2, 1.0 + dot);
+        const shadowFactor = Math.max(0.2, 1.0 + dot);
+        brightness *= shadowFactor;
+        alpha *= shadowFactor;
       }
 
-      colors.push([
+      core.push([
         baseRgb[0] * brightness,
         baseRgb[1] * brightness,
         baseRgb[2] * brightness,
       ]);
+      coreAlpha.push(Math.min(0.95, alpha));
+
+      glow.push([
+        baseRgb[0] * brightness * 0.7,
+        baseRgb[1] * brightness * 0.7,
+        baseRgb[2] * brightness * 0.7,
+      ]);
+      glowAlpha.push(Math.min(0.2, alpha * 0.25));
     }
 
-    return colors;
+    return {
+      coreColors: core,
+      coreOpacities: coreAlpha,
+      glowColors: glow,
+      glowOpacities: glowAlpha,
+    };
   }, [positions, currentIndex, baseRgb, camera.position]);
 
-  if (positions.length < 2 || vertexColors.length === 0) return null;
+  if (positions.length < 2 || coreColors.length === 0) return null;
 
   return (
     <group visible={visible}>
-      {/* Glow halo — wider, transparent */}
+      {/* Glow halo — wider, with alpha gradient */}
       <Line
         points={points}
-        vertexColors={vertexColors}
-        lineWidth={5}
+        vertexColors={glowColors}
+        lineWidth={6}
         transparent
         opacity={0.15}
         depthWrite={false}
       />
 
-      {/* Core trajectory — bright, sharp */}
+      {/* Core trajectory — bright, with per-vertex alpha fading */}
       <Line
         points={points}
-        vertexColors={vertexColors}
-        lineWidth={2}
+        vertexColors={coreColors}
+        lineWidth={2.5}
         transparent
         opacity={0.9}
         depthWrite={false}

@@ -179,6 +179,12 @@ class WsOrbitParams(BaseModel):
     )
     time_span: float = Field(..., gt=0, description="Total simulation time in seconds")
     time_step: float = Field(..., gt=0, description="Output time step in seconds")
+    resume_from_time: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="Resume streaming from this simulation time (seconds). "
+                    "Frames before this timestamp are skipped.",
+    )
 
     @field_validator("initial_position")
     @classmethod
