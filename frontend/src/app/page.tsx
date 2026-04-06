@@ -25,6 +25,7 @@ import Sidebar from "@/components/dashboard/Sidebar";
 import ControlPanel from "@/components/dashboard/ControlPanel";
 import TelemetryPanel from "@/components/dashboard/TelemetryPanel";
 import DiagnosticsPanel from "@/components/dashboard/DiagnosticsPanel";
+import GraphsPanel from "@/components/dashboard/GraphsPanel";
 import StatusBar from "@/components/dashboard/StatusBar";
 import { Separator } from "@/components/ui/separator";
 
@@ -143,8 +144,15 @@ function DashboardLayout() {
           <Separator className="bg-white/[0.06] mx-4" />
 
           {/* Diagnostics Section (#11, #12) */}
-          <div className="px-4 py-4 flex-1">
+          <div className="px-4 py-4">
             <DiagnosticsPanel />
+          </div>
+
+          <Separator className="bg-white/[0.06] mx-4" />
+
+          {/* Analytical Graphs Section */}
+          <div className="px-4 py-4 flex-1">
+            <GraphsPanel />
           </div>
         </aside>
       </div>
