@@ -212,3 +212,86 @@ class WsOrbitParams(BaseModel):
                 f"time_span ({self.time_span})"
             )
         return self
+
+
+# ── Transfer Request/Response ───────────────────────────────────────
+
+
+class TransferRequest(BaseModel):
+    """Input parameters for a Hohmann transfer simulation.
+
+    All radii must be in **SI units** (metres).
+
+    Attributes
+    ----------
+    initial_radius : float
+        Radius of the initial circular orbit [m]. Must be > 0.
+    target_radius : float
+        Radius of the target circular orbit [m]. Must be > 0.
+    max_points : int | None
+        Maximum number of trajectory points returned to the client.
+    """
+
+    initial_radius: float = Field(
+        ...,
+        gt=0,
+        description="Radius of the initial circular orbit [m]",
+        examples=[7000000.0],
+    )
+    target_radius: float = Field(
+        ...,
+        gt=0,
+        description="Radius of the target circular orbit [m]",
+        examples=[42164000.0],  # GEO
+    )
+    max_points: Optional[int] = Field(
+        default=500,
+        gt=0,
+        description="Max trajectory points returned (uniform downsample). "
+                    "Set to null to disable downsampling.",
+        examples=[500],
+    )
+
+    @model_validator(mode="after")
+    def radii_must_differ(self) -> TransferRequest:
+        if self.initial_radius == self.target_radius:
+            raise ValueError("initial_radius and target_radius must be different")
+        return self
+
+
+class TransferResponse(BaseModel):
+    """Response from a Hohmann transfer calculation and simulation.
+
+    Returns scalar delta-v magnitudes, transfer time, and the complete
+    continuous trajectory spanning the initial orbit, the transfer ellipse,
+    and the final orbit.
+
+    Attributes
+    ----------
+    simulation_id : str
+        Unique simulation identifier.
+    delta_v1 : float
+        Magnitude of the first velocity change [m/s].
+    delta_v2 : float
+        Magnitude of the second velocity change [m/s].
+    total_delta_v : float
+        Total delta-v required for the transfer [m/s].
+    transfer_time : float
+        Duration of the transfer phase [s] (half the ellipse period).
+    time : list[float]
+        Epoch values [s].
+    position : list[list[float]]
+        Position vectors [m] — (N, 3).
+    velocity : list[list[float]]
+        Velocity vectors [m/s] — (N, 3).
+    """
+
+    simulation_id: str = Field(..., description="Unique simulation identifier")
+    delta_v1: float = Field(..., description="First velocity change [m/s]")
+    delta_v2: float = Field(..., description="Second velocity change [m/s]")
+    total_delta_v: float = Field(..., description="Total delta-v [m/s]")
+    transfer_time: float = Field(..., description="Transfer duration [s]")
+    time: list[float] = Field(..., description="Time stamps [s]")
+    position: list[list[float]] = Field(..., description="Position vectors [m] — (N, 3)")
+    velocity: list[list[float]] = Field(..., description="Velocity vectors [m/s] — (N, 3)")
+

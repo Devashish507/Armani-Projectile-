@@ -19,8 +19,9 @@ import uuid
 import numpy as np
 from fastapi import APIRouter, HTTPException
 
-from models.orbit import OrbitRequest, OrbitResponse, SimulationMetadata
+from models.orbit import OrbitRequest, OrbitResponse, SimulationMetadata, TransferRequest, TransferResponse
 from services.orbit.propagator import propagate_orbit
+from services.orbit.transfer import compute_hohmann_transfer, generate_transfer_trajectory
 
 logger = logging.getLogger(__name__)
 
@@ -139,4 +140,66 @@ async def simulate_orbit(request: OrbitRequest) -> OrbitResponse:
             status_code=500,
             detail="An internal error occurred during simulation.",
         ) from exc
+
+
+@router.post(
+    "/transfer",
+    response_model=TransferResponse,
+    summary="Compute and simulate a Hohmann transfer orbit",
+    response_description="Transfer parameters and continuous multiphase trajectory",
+)
+async def simulate_transfer(request: TransferRequest) -> TransferResponse:
+    """Computes a Hohmann transfer and returns the combined trajectory.
+    
+    Performs standard orbital mechanics calculations for a two-impulse
+    Hohmann transfer between circular orbits, then propagates the full
+    sequence (initial orbit, transfer ellipse, final orbit) into a single
+    continuous dataset.
+    """
+    simulation_id = str(uuid.uuid4())
+
+    try:
+        # 1. Compute analytic transfer variables
+        params = compute_hohmann_transfer(request.initial_radius, request.target_radius)
+
+        # 2. Simulate 3-phase continuous trajectory, offloaded to worker thread
+        time_out, pos_out, vel_out = await asyncio.to_thread(
+            generate_transfer_trajectory,
+            r1=request.initial_radius,
+            r2=request.target_radius,
+        )
+
+        # 3. Downsample for UI performance
+        if request.max_points is not None:
+            time_out, pos_out, vel_out = _downsample(
+                time_out, pos_out, vel_out, request.max_points,
+            )
+
+        # 4. Construct response
+        return TransferResponse(
+            simulation_id=simulation_id,
+            delta_v1=params["delta_v1"],
+            delta_v2=params["delta_v2"],
+            total_delta_v=params["total_delta_v"],
+            transfer_time=params["transfer_time"],
+            time=time_out.tolist(),
+            position=pos_out.tolist(),
+            velocity=vel_out.tolist(),
+        )
+
+    except ValueError as exc:
+        logger.warning("Transfer simulation rejected — invalid input: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    except RuntimeError as exc:
+        logger.error("Transfer simulation failed — solver error: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    except Exception as exc:
+        logger.exception("Unexpected error during transfer simulation")
+        raise HTTPException(
+            status_code=500,
+            detail="An internal error occurred during transfer simulation.",
+        ) from exc
+
 
