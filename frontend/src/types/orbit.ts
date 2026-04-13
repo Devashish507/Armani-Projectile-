@@ -41,11 +41,14 @@ export const FRAME_SIZE_CONTROL = 12;
 
 // ── Request ────────────────────────────────────────────────────────
 
-export interface OrbitSimulationRequest {
-  /** Cartesian position [x, y, z] in metres. */
+export interface SatelliteConfig {
+  id: string;
   initial_position: [number, number, number];
-  /** Cartesian velocity [vx, vy, vz] in m/s. */
   initial_velocity: [number, number, number];
+}
+
+export interface OrbitSimulationRequest {
+  satellites: SatelliteConfig[];
   /** Total simulation duration in seconds. */
   time_span: number;
   /** Output sample interval in seconds. */
@@ -65,14 +68,16 @@ export interface SimulationMetadata {
   n_steps: number;
 }
 
+export interface SatelliteTrajectory {
+  id: string;
+  time: number[];
+  position: [number, number, number][];
+  velocity: [number, number, number][];
+}
+
 export interface OrbitSimulationResponse {
   simulation_id: string;
-  /** Epoch timestamps in seconds from simulation start. */
-  time: number[];
-  /** Position vectors [m] at each epoch — shape (N, 3). */
-  position: [number, number, number][];
-  /** Velocity vectors [m/s] at each epoch — shape (N, 3). */
-  velocity: [number, number, number][];
+  satellites: SatelliteTrajectory[];
   metadata: SimulationMetadata | null;
 }
 
@@ -138,9 +143,10 @@ export interface ConnectionDiagnostics {
 
 // ── WebSocket message types ────────────────────────────────────────
 
-/** Single position frame received over the WebSocket (v1 protocol). */
+/** Single position frame received over the WebSocket (v2 Protocol). */
 export interface WsPositionUpdate {
   type: "position_update";
+  id: string;
   version: number;
   seq: number;
   time: number;

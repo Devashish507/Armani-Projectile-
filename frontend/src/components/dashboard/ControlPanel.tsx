@@ -18,6 +18,8 @@ import {
   Globe,
   Crosshair,
   Move3d,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import type { CameraMode } from "@/types/orbit";
 
@@ -39,6 +41,9 @@ export default function ControlPanel() {
     pauseSimulation,
     resetSimulation,
     simulationActive,
+    params,
+    hiddenSatellites,
+    toggleSatelliteVisibility,
   } = useMission();
 
   return (
@@ -148,6 +153,42 @@ export default function ControlPanel() {
               {label}
             </button>
           ))}
+        </div>
+      </div>
+
+      <Separator className="bg-white/[0.06]" />
+
+      {/* ── Constellation Visibility ──────────────────────────────── */}
+      <div>
+        <span className="text-[10px] font-mono tracking-[0.1em] text-white/30 uppercase mb-2 block">
+          Constellation Visibility
+        </span>
+        <div className="flex flex-col gap-1.5 max-h-32 overflow-y-auto pr-1 custom-scrollbar">
+          {params.satellites.map((sat) => {
+            const isHidden = hiddenSatellites.includes(sat.id);
+            return (
+              <button
+                key={sat.id}
+                onClick={() => toggleSatelliteVisibility(sat.id)}
+                className={`
+                  flex items-center justify-between px-3 py-1.5 rounded-md
+                  text-[11px] font-mono transition-all border
+                  ${
+                    !isHidden
+                      ? "text-white/80 bg-white/[0.04] border-white/[0.08] hover:bg-white/[0.08]"
+                      : "text-white/30 bg-black/20 border-transparent hover:text-white/50"
+                  }
+                `}
+              >
+                <span>{sat.id.toUpperCase()}</span>
+                {isHidden ? (
+                  <EyeOff className="w-3.5 h-3.5 opacity-50" />
+                ) : (
+                  <Eye className="w-3.5 h-3.5 text-cyan-400" />
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
     </div>

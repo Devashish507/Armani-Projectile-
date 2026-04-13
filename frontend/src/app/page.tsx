@@ -76,6 +76,7 @@ function DashboardLayout() {
     setTelemetry,
     setWsStatus,
     setDiagnosticsRef,
+    hiddenSatellites,
   } = useMission();
 
   return (
@@ -107,6 +108,7 @@ function DashboardLayout() {
             onTelemetryUpdate={setTelemetry}
             onConnectionChange={setWsStatus}
             onDiagnosticsReady={setDiagnosticsRef}
+            hiddenSatellites={hiddenSatellites}
           />
         </div>
 

@@ -23,7 +23,9 @@ import {
   MapPin,
   Zap,
   Clock,
+  Network,
 } from "lucide-react";
+import { generateWalkerDelta } from "@/lib/constellations";
 
 // ── Helpers ────────────────────────────────────────────────────────
 
@@ -48,17 +50,22 @@ export default function Sidebar() {
       setForm((prev) => {
         const next = { ...prev };
         const num = parseNum(value);
+        if (!next.satellites || next.satellites.length === 0) return next;
+        
+        const sat = { ...next.satellites[0] };
 
         switch (path) {
-          case "px": next.initial_position = [num, prev.initial_position[1], prev.initial_position[2]]; break;
-          case "py": next.initial_position = [prev.initial_position[0], num, prev.initial_position[2]]; break;
-          case "pz": next.initial_position = [prev.initial_position[0], prev.initial_position[1], num]; break;
-          case "vx": next.initial_velocity = [num, prev.initial_velocity[1], prev.initial_velocity[2]]; break;
-          case "vy": next.initial_velocity = [prev.initial_velocity[0], num, prev.initial_velocity[2]]; break;
-          case "vz": next.initial_velocity = [prev.initial_velocity[0], prev.initial_velocity[1], num]; break;
+          case "px": sat.initial_position = [num, sat.initial_position[1], sat.initial_position[2]]; break;
+          case "py": sat.initial_position = [sat.initial_position[0], num, sat.initial_position[2]]; break;
+          case "pz": sat.initial_position = [sat.initial_position[0], sat.initial_position[1], num]; break;
+          case "vx": sat.initial_velocity = [num, sat.initial_velocity[1], sat.initial_velocity[2]]; break;
+          case "vy": sat.initial_velocity = [sat.initial_velocity[0], num, sat.initial_velocity[2]]; break;
+          case "vz": sat.initial_velocity = [sat.initial_velocity[0], sat.initial_velocity[1], num]; break;
           case "time_span": next.time_span = num; break;
           case "time_step": next.time_step = num; break;
         }
+        
+        next.satellites = [sat, ...next.satellites.slice(1)];
         return next;
       });
 
@@ -78,19 +85,22 @@ export default function Sidebar() {
     if (form.time_step <= 0) errs.time_step = "Must be > 0";
     if (form.time_step > form.time_span) errs.time_step = "Must be ≤ time span";
 
-    const velMag = Math.sqrt(
-      form.initial_velocity[0] ** 2 +
-      form.initial_velocity[1] ** 2 +
-      form.initial_velocity[2] ** 2,
-    );
-    if (velMag === 0) errs.vx = "Velocity cannot be zero";
+    const sat = form.satellites[0];
+    if (sat) {
+      const velMag = Math.sqrt(
+        sat.initial_velocity[0] ** 2 +
+        sat.initial_velocity[1] ** 2 +
+        sat.initial_velocity[2] ** 2,
+      );
+      if (velMag === 0) errs.vx = "Velocity cannot be zero";
 
-    const posMag = Math.sqrt(
-      form.initial_position[0] ** 2 +
-      form.initial_position[1] ** 2 +
-      form.initial_position[2] ** 2,
-    );
-    if (posMag === 0) errs.px = "Position cannot be zero";
+      const posMag = Math.sqrt(
+        sat.initial_position[0] ** 2 +
+        sat.initial_position[1] ** 2 +
+        sat.initial_position[2] ** 2,
+      );
+      if (posMag === 0) errs.px = "Position cannot be zero";
+    }
 
     setErrors(errs);
     return Object.keys(errs).length === 0;
@@ -104,6 +114,36 @@ export default function Sidebar() {
 
   const handleReset = useCallback(() => {
     setForm({ ...DEFAULT_PARAMS });
+    setErrors({});
+  }, []);
+
+  const handleApplyPreset = useCallback((type: "starlink" | "galileo") => {
+    let sats;
+    if (type === "starlink") {
+      sats = generateWalkerDelta({
+        altitudeKm: 550,
+        inclinationDeg: 53.0,
+        t: 72,
+        p: 3,
+        f: 1
+      }, "starlink");
+    } else {
+      sats = generateWalkerDelta({
+        altitudeKm: 23222,
+        inclinationDeg: 56.0,
+        t: 24,
+        p: 3,
+        f: 1
+      }, "galileo");
+    }
+
+    setForm((prev) => ({
+      ...prev,
+      satellites: sats,
+      // Increase time span for Galileo since its period is 14 hours
+      time_span: type === "galileo" ? 50400 : 5400,
+      time_step: type === "galileo" ? 100 : 10,
+    }));
     setErrors({});
   }, []);
 
@@ -158,22 +198,22 @@ export default function Sidebar() {
 
       <div className="flex-1 px-4 py-3 space-y-5">
         {/* ── Position Group ────────────────────────────────────── */}
-        <FieldGroup icon={<MapPin className="w-3.5 h-3.5" />} label="Initial Position (m)">
-          <FieldRow id="param-px" label="X" value={form.initial_position[0]} error={errors.px}
+        <FieldGroup icon={<MapPin className="w-3.5 h-3.5" />} label="Sat-1 Position (m)">
+          <FieldRow id="param-px" label="X" value={form.satellites[0]?.initial_position[0] ?? 0} error={errors.px}
                     onChange={(v) => updateField("px", v)} placeholder="7000000" />
-          <FieldRow id="param-py" label="Y" value={form.initial_position[1]}
+          <FieldRow id="param-py" label="Y" value={form.satellites[0]?.initial_position[1] ?? 0}
                     onChange={(v) => updateField("py", v)} placeholder="0" />
-          <FieldRow id="param-pz" label="Z" value={form.initial_position[2]}
+          <FieldRow id="param-pz" label="Z" value={form.satellites[0]?.initial_position[2] ?? 0}
                     onChange={(v) => updateField("pz", v)} placeholder="0" />
         </FieldGroup>
 
         {/* ── Velocity Group ────────────────────────────────────── */}
-        <FieldGroup icon={<Zap className="w-3.5 h-3.5" />} label="Initial Velocity (m/s)">
-          <FieldRow id="param-vx" label="Vx" value={form.initial_velocity[0]} error={errors.vx}
+        <FieldGroup icon={<Zap className="w-3.5 h-3.5" />} label="Sat-1 Velocity (m/s)">
+          <FieldRow id="param-vx" label="Vx" value={form.satellites[0]?.initial_velocity[0] ?? 0} error={errors.vx}
                     onChange={(v) => updateField("vx", v)} placeholder="0" />
-          <FieldRow id="param-vy" label="Vy" value={form.initial_velocity[1]}
+          <FieldRow id="param-vy" label="Vy" value={form.satellites[0]?.initial_velocity[1] ?? 0}
                     onChange={(v) => updateField("vy", v)} placeholder="7546" />
-          <FieldRow id="param-vz" label="Vz" value={form.initial_velocity[2]}
+          <FieldRow id="param-vz" label="Vz" value={form.satellites[0]?.initial_velocity[2] ?? 0}
                     onChange={(v) => updateField("vz", v)} placeholder="0" />
         </FieldGroup>
 
@@ -183,6 +223,32 @@ export default function Sidebar() {
                     onChange={(v) => updateField("time_span", v)} placeholder="5400" />
           <FieldRow id="param-tstep" label="Step" value={form.time_step} error={errors.time_step}
                     onChange={(v) => updateField("time_step", v)} placeholder="10" />
+        </FieldGroup>
+
+        {/* ── Constellation Presets ──────────────────────────────── */}
+        <FieldGroup icon={<Network className="w-3.5 h-3.5" />} label="Constellation Presets">
+          <div className="flex flex-col gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleApplyPreset("starlink")}
+              className="bg-white/[0.04] border-white/[0.08] text-white/70 hover:text-white
+                         font-mono text-[10px] tracking-wider justify-between h-8"
+            >
+              LEO Shell
+              <span className="text-white/30 text-[9px]">72 Sats</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleApplyPreset("galileo")}
+              className="bg-white/[0.04] border-white/[0.08] text-white/70 hover:text-white
+                         font-mono text-[10px] tracking-wider justify-between h-8"
+            >
+              MEO Params
+              <span className="text-white/30 text-[9px]">24 Sats</span>
+            </Button>
+          </div>
         </FieldGroup>
       </div>
 

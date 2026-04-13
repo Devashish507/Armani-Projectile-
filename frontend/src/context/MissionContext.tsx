@@ -33,16 +33,29 @@ import { PROTOCOL_VERSION } from "@/types/orbit";
 // ── Param types ────────────────────────────────────────────────────
 
 export interface MissionParams {
-  initial_position: [number, number, number];
-  initial_velocity: [number, number, number];
+  satellites: {
+    id: string;
+    initial_position: [number, number, number];
+    initial_velocity: [number, number, number];
+  }[];
   time_span: number;
   time_step: number;
 }
 
 /** ISS-like LEO defaults — pre-filled in the sidebar form. */
 export const DEFAULT_PARAMS: MissionParams = {
-  initial_position: [7_000_000, 0, 0],
-  initial_velocity: [0, 7546, 0],
+  satellites: [
+    {
+      id: "sat-1",
+      initial_position: [7_000_000, 0, 0],
+      initial_velocity: [0, 7546, 0],
+    },
+    {
+      id: "sat-2",
+      initial_position: [-7_000_000, 0, 0],
+      initial_velocity: [0, -7546, 0],
+    }
+  ],
   time_span: 5400,
   time_step: 10,
 };
@@ -62,6 +75,10 @@ interface MissionContextValue {
   // ── Camera mode (#14) ────────────────────────────────────────────
   cameraMode: CameraMode;
   setCameraMode: (m: CameraMode) => void;
+
+  // ── Visibility ───────────────────────────────────────────────────
+  hiddenSatellites: string[];
+  toggleSatelliteVisibility: (id: string) => void;
 
   // ── Simulation lifecycle ─────────────────────────────────────────
   simulationActive: boolean;
@@ -96,6 +113,7 @@ export function MissionProvider({ children }: { children: ReactNode }) {
   });
 
   const [cameraMode, setCameraMode] = useState<CameraMode>("orbit");
+  const [hiddenSatellites, setHiddenSatellites] = useState<string[]>([]);
 
   const [simulationActive, setSimulationActive] = useState(true);
   const [simulationKey, setSimulationKey] = useState(0);
@@ -171,6 +189,12 @@ export function MissionProvider({ children }: { children: ReactNode }) {
     setPlayback((p) => ({ ...p, paused: false }));
   }, []);
 
+  const toggleSatelliteVisibility = useCallback((id: string) => {
+    setHiddenSatellites((prev) =>
+      prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]
+    );
+  }, []);
+
   const pauseSimulation = useCallback(() => {
     setPlayback((p) => ({ ...p, paused: true }));
   }, []);
@@ -210,6 +234,8 @@ export function MissionProvider({ children }: { children: ReactNode }) {
         setWsStatus,
         diagnostics,
         setDiagnosticsRef,
+        hiddenSatellites,
+        toggleSatelliteVisibility,
       }}
     >
       {children}
