@@ -45,6 +45,14 @@ export interface SatelliteConfig {
   id: string;
   initial_position: [number, number, number];
   initial_velocity: [number, number, number];
+  /** Optional metadata for constellation structural visualization. */
+  metadata?: {
+    planeIndex: number;
+    satIndex: number;
+    raan: number; // RAAN in radians
+    inclination: number; // Inclination in radians
+    radius: number; // Orbital radius in world units
+  };
 }
 
 export interface OrbitSimulationRequest {

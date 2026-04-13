@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState, useCallback, useRef } from "react";
+import { Suspense, useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Stars, Preload } from "@react-three/drei";
 import { ACESFilmicToneMapping } from "three";
@@ -79,12 +79,10 @@ import { useOrbitWebSocket } from "@/hooks/useOrbitWebSocket";
 
 // ── Configuration ─────────────────────────────────────────────────
 
+import type { SatelliteConfig } from "@/types/orbit";
+
 export interface OrbitParams {
-  satellites: {
-    id: string;
-    initial_position: [number, number, number];
-    initial_velocity: [number, number, number];
-  }[];
+  satellites: SatelliteConfig[];
   time_span: number;
   time_step: number;
 }
@@ -258,28 +256,72 @@ function StreamedOrbit({
   onPositionUpdate,
   hiddenSatellites = [],
 }: StreamedOrbitProps) {
+  
+  // Extract unique planes for rendering
+  const planes = useMemo(() => {
+    const uniquePlanes = new Map();
+    orbitParams.satellites.forEach(sat => {
+      if (sat.metadata) {
+        if (!uniquePlanes.has(sat.metadata.planeIndex)) {
+          uniquePlanes.set(sat.metadata.planeIndex, {
+            ...sat.metadata,
+            color: `hsl(${(sat.metadata.planeIndex * 137) % 360}, 100%, 50%)`
+          });
+        }
+      }
+    });
+    return Array.from(uniquePlanes.values());
+  }, [orbitParams.satellites]);
+
   return (
     <>
-      <OrbitPlane orbitRadius={1.063} />
+      {/* Dynamic Plane Visualizations */}
+      {planes.map((p: any) => (
+        <OrbitPlane 
+          key={`plane-${p.planeIndex}`}
+          orbitRadius={p.radius}
+          inclinationDeg={(p.inclination * 180) / Math.PI}
+          raan={p.raan}
+          color={p.color}
+          opacity={0.3}
+          visible={true}
+        />
+      ))}
+      
+      {/* Fallback Single Plane if no metadata exists */}
+      {planes.length === 0 && <OrbitPlane orbitRadius={1.063} />}
+
+      {/* Satellites */}
       {orbitParams.satellites
         .filter((sat) => !hiddenSatellites.includes(sat.id))
-        .map((sat, index) => (
-          <StreamedSatellite 
-            key={sat.id} 
-            satId={sat.id} 
-            ws={ws} 
-            orbitParams={orbitParams} 
-            orbitColor={index === 0 ? orbitColor : `hsl(${(index * 137) % 360}, 100%, 50%)`} 
-            onTelemetryUpdate={index === 0 ? onTelemetryUpdate : undefined}
-            onPositionUpdate={index === 0 ? onPositionUpdate : undefined}
-          />
-      ))}
+        .map((sat, index) => {
+          const isFirst = index === 0;
+          const pColor = sat.metadata 
+            ? `hsl(${(sat.metadata.planeIndex * 137) % 360}, 100%, 50%)`
+            : (isFirst ? orbitColor : `hsl(${(index * 137) % 360}, 100%, 50%)`);
+            
+          return (
+            <StreamedSatellite 
+              key={sat.id} 
+              satId={sat.id}
+              label={sat.id}
+              planeColor={pColor}
+              ws={ws} 
+              orbitParams={orbitParams} 
+              orbitColor={pColor} 
+              onTelemetryUpdate={isFirst ? onTelemetryUpdate : undefined}
+              onPositionUpdate={isFirst ? onPositionUpdate : undefined}
+            />
+          );
+      })}
     </>
   );
 }
 
 function StreamedSatellite({
   satId,
+  label,
+  planeColor,
   ws,
   orbitParams,
   orbitColor,
@@ -287,6 +329,8 @@ function StreamedSatellite({
   onPositionUpdate,
 }: {
   satId: string;
+  label?: string;
+  planeColor?: string;
   ws: ReturnType<typeof useOrbitWebSocket>;
   orbitParams: OrbitParams;
   orbitColor: string;

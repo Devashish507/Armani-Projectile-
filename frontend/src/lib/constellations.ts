@@ -1,15 +1,11 @@
+import type { SatelliteConfig } from "@/types/orbit";
+
 export interface ConstellationParams {
   altitudeKm: number;
   inclinationDeg: number;
   t: number; // Total satellites
   p: number; // Number of planes
   f: number; // Relative spacing parameter
-}
-
-export interface SatelliteConfig {
-  id: string;
-  initial_position: [number, number, number];
-  initial_velocity: [number, number, number];
 }
 
 const EARTH_RADIUS_M = 6371000;
@@ -72,6 +68,13 @@ export function generateWalkerDelta(
         id: `${prefix}-${plane + 1}-${satInPlane + 1}`,
         initial_position: [x, y, z],
         initial_velocity: [vx, vy, vz],
+        metadata: {
+          planeIndex: plane,
+          satIndex: satInPlane,
+          raan: omega,
+          inclination: iRad,
+          radius: radius / EARTH_RADIUS_M, // Scaled to world units
+        }
       });
     }
   }

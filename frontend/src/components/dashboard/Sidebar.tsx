@@ -45,6 +45,39 @@ export default function Sidebar() {
   const [form, setForm] = useState<MissionParams>({ ...params });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
+  const [walkerConfig, setWalkerConfig] = useState({
+    t: 24, p: 3, f: 1, altitudeKm: 550, inclinationDeg: 53.0
+  });
+
+  const updateWalker = useCallback((key: keyof typeof walkerConfig, val: string) => {
+    setWalkerConfig(prev => ({ ...prev, [key]: parseNum(val) }));
+    setErrors(prev => {
+      const next = { ...prev };
+      delete next.walker;
+      return next;
+    });
+  }, []);
+
+  const generateCustomConstellation = useCallback(() => {
+    if (walkerConfig.p === 0 || walkerConfig.t % walkerConfig.p !== 0) {
+      setErrors((prev) => ({ ...prev, walker: "T must be a multiple of P" }));
+      return;
+    }
+    if (walkerConfig.t > 200) {
+      // Soft memory/processing limit warning
+      if (!window.confirm(`Warning: Simulating ${walkerConfig.t} satellites might cause performance issues. Proceed?`)) {
+        return;
+      }
+    }
+    try {
+      const sats = generateWalkerDelta(walkerConfig, "sat");
+      setForm((prev) => ({ ...prev, satellites: sats }));
+      setErrors({});
+    } catch (err: any) {
+      setErrors((prev) => ({ ...prev, walker: err.message || "Config error" }));
+    }
+  }, [walkerConfig]);
+
   const updateField = useCallback(
     (path: string, value: string) => {
       setForm((prev) => {
@@ -225,8 +258,33 @@ export default function Sidebar() {
                     onChange={(v) => updateField("time_step", v)} placeholder="10" />
         </FieldGroup>
 
+        {/* ── Walker-Delta Configurator ─────────────────────────── */}
+        <FieldGroup icon={<Network className="w-3.5 h-3.5" />} label="Walker-Delta Generator">
+          <FieldRow id="walker-t" label="T(Sats)" value={walkerConfig.t} 
+                    onChange={(v) => updateWalker("t", v)} placeholder="24" />
+          <FieldRow id="walker-p" label="P(Planes)" value={walkerConfig.p} 
+                    onChange={(v) => updateWalker("p", v)} placeholder="3" />
+          <FieldRow id="walker-f" label="F(Phase)" value={walkerConfig.f} 
+                    onChange={(v) => updateWalker("f", v)} placeholder="1" />
+          <FieldRow id="walker-alt" label="Alt(km)" value={walkerConfig.altitudeKm} 
+                    onChange={(v) => updateWalker("altitudeKm", v)} placeholder="550" />
+          <FieldRow id="walker-inc" label="Inc(deg)" value={walkerConfig.inclinationDeg} 
+                    onChange={(v) => updateWalker("inclinationDeg", v)} placeholder="53" />
+          
+          {errors.walker && <p className="text-[10px] text-red-500/90 font-mono mt-1 mb-2 font-bold bg-red-500/10 p-1 rounded">{errors.walker}</p>}
+          
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={generateCustomConstellation}
+            className="w-full mt-2 bg-cyan-500/10 border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 hover:text-cyan-300 font-mono text-[10px] tracking-wider"
+          >
+            GENERATE CONSTELLATION
+          </Button>
+        </FieldGroup>
+        
         {/* ── Constellation Presets ──────────────────────────────── */}
-        <FieldGroup icon={<Network className="w-3.5 h-3.5" />} label="Constellation Presets">
+        <FieldGroup icon={<MapPin className="w-3.5 h-3.5" />} label="Quick Presets">
           <div className="flex flex-col gap-2">
             <Button
               variant="outline"

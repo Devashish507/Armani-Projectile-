@@ -27,17 +27,14 @@ import type {
   WsConnectionState,
   CameraMode,
   ConnectionDiagnostics,
+  SatelliteConfig,
 } from "@/types/orbit";
 import { PROTOCOL_VERSION } from "@/types/orbit";
 
 // ── Param types ────────────────────────────────────────────────────
 
 export interface MissionParams {
-  satellites: {
-    id: string;
-    initial_position: [number, number, number];
-    initial_velocity: [number, number, number];
-  }[];
+  satellites: SatelliteConfig[];
   time_span: number;
   time_step: number;
 }
@@ -79,6 +76,7 @@ interface MissionContextValue {
   // ── Visibility ───────────────────────────────────────────────────
   hiddenSatellites: string[];
   toggleSatelliteVisibility: (id: string) => void;
+  togglePlaneVisibility: (ids: string[]) => void;
 
   // ── Simulation lifecycle ─────────────────────────────────────────
   simulationActive: boolean;
@@ -195,6 +193,21 @@ export function MissionProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  const togglePlaneVisibility = useCallback((ids: string[]) => {
+    setHiddenSatellites((prev) => {
+      // Determine if ALL given ids are currently hidden
+      const allHidden = ids.every(id => prev.includes(id));
+      if (allHidden) {
+        // Unhide them all: remove ids from prev
+        return prev.filter(id => !ids.includes(id));
+      } else {
+        // Hide them all: union prev and ids
+        const newSet = new Set([...prev, ...ids]);
+        return Array.from(newSet);
+      }
+    });
+  }, []);
+
   const pauseSimulation = useCallback(() => {
     setPlayback((p) => ({ ...p, paused: true }));
   }, []);
@@ -236,6 +249,7 @@ export function MissionProvider({ children }: { children: ReactNode }) {
         setDiagnosticsRef,
         hiddenSatellites,
         toggleSatelliteVisibility,
+        togglePlaneVisibility,
       }}
     >
       {children}
