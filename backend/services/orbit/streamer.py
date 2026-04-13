@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -43,78 +43,77 @@ class OrbitFrame:
 # ── Async streaming generator ──────────────────────────────────────
 
 
-async def stream_orbit(
-    initial_position: NDArray[np.float64],
-    initial_velocity: NDArray[np.float64],
+async def stream_constellation(
+    satellites: list[Any],  # list of SatelliteConfig from models
     time_span: float,
     time_step: float,
     stream_interval: float = 0.05,
-) -> AsyncGenerator[OrbitFrame, None]:
-    """Propagate an orbit and yield frames one-by-one in real time.
+) -> AsyncGenerator[list[dict[str, Any]], None]:
+    """Propagate multiple orbits and yield frames one-by-one in real time.
 
-    The full trajectory is computed up-front (in a worker thread to
-    avoid blocking the event loop) and then iterated step-by-step
-    with *stream_interval* seconds between yields.
-
-    Parameters
-    ----------
-    initial_position : (3,) array
-        Cartesian position [x, y, z] in metres.
-    initial_velocity : (3,) array
-        Cartesian velocity [vx, vy, vz] in m/s.
-    time_span : float
-        Total simulation duration in seconds.
-    time_step : float
-        Output sample interval in seconds.
-    stream_interval : float
-        Delay between yielded frames in seconds (default 0.05 = 20 Hz).
+    The full trajectories are computed up-front (in worker threads) and then
+    iterated step-by-step with *stream_interval* seconds between yields.
+    Yields a list of satellite updates per step.
 
     Yields
     ------
-    OrbitFrame
-        One position/velocity snapshot per simulation step.
+    list[dict]
+        A list of JSON-serializable dictionaries containing id, position, velocity, etc.
     """
     logger.info(
-        "Starting orbit stream — t_span=%.1f s, dt=%.1f s, interval=%.3f s",
+        "Starting constellation stream — %d sats, t_span=%.1f s, dt=%.1f s",
+        len(satellites),
         time_span,
         time_step,
-        stream_interval,
     )
 
     # ── Run CPU-bound propagation off the event loop ────────────
-    result = await asyncio.to_thread(
-        propagate_orbit,
-        initial_position=initial_position,
-        initial_velocity=initial_velocity,
-        time_span=time_span,
-        time_step=time_step,
-    )
+    # We can run them concurrently using asyncio.gather
+    async def _propagate(sat):
+        result = await asyncio.to_thread(
+            propagate_orbit,
+            initial_position=np.array(sat.initial_position, dtype=np.float64),
+            initial_velocity=np.array(sat.initial_velocity, dtype=np.float64),
+            time_span=time_span,
+            time_step=time_step,
+        )
+        return sat.id, result
 
-    total_steps = len(result.time)
-    logger.info("Orbit computed — %d steps, streaming at %.0f Hz", total_steps, 1 / stream_interval)
+    results = await asyncio.gather(*[_propagate(sat) for sat in satellites])
+    
+    if not results:
+        return
+
+    # All propagations use the same time evaluations, so they have the same steps
+    total_steps = len(results[0][1].time)
+    logger.info("Constellation computed — %d steps", total_steps)
 
     # ── Yield frames one at a time ──────────────────────────────
     for i in range(total_steps):
-        frame = OrbitFrame(
-            seq_id=i,
-            step=i,
-            total_steps=total_steps,
-            time=float(result.time[i]),
-            position=(
-                float(result.position[i, 0]),
-                float(result.position[i, 1]),
-                float(result.position[i, 2]),
-            ),
-            velocity=(
-                float(result.velocity[i, 0]),
-                float(result.velocity[i, 1]),
-                float(result.velocity[i, 2]),
-            ),
-        )
-        yield frame
+        step_frames = []
+        for sat_id, result in results:
+            step_frames.append({
+                "type": "position_update",
+                "id": sat_id,
+                "time": float(result.time[i]),
+                "position": [
+                    float(result.position[i, 0]),
+                    float(result.position[i, 1]),
+                    float(result.position[i, 2]),
+                ],
+                "velocity": [
+                    float(result.velocity[i, 0]),
+                    float(result.velocity[i, 1]),
+                    float(result.velocity[i, 2]),
+                ],
+                "step": i,
+                "total_steps": total_steps,
+            })
+        
+        yield step_frames
 
         # Real-time pacing — skip delay on last frame
         if i < total_steps - 1:
             await asyncio.sleep(stream_interval)
 
-    logger.info("Orbit stream complete — %d frames sent", total_steps)
+    logger.info("Constellation stream complete — %d frames sent", total_steps)

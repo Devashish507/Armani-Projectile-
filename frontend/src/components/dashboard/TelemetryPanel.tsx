@@ -82,10 +82,11 @@ export default function TelemetryPanel({
   const posRadiusKm = telemetry.altitudeKm + EARTH_RADIUS_KM;
 
   // Compute unit direction from the initial position vector
+  const initialPos = params.satellites[0]?.initial_position ?? [0, 0, 0];
   const initialMag = Math.sqrt(
-    params.initial_position[0] ** 2 +
-    params.initial_position[1] ** 2 +
-    params.initial_position[2] ** 2,
+    initialPos[0] ** 2 +
+    initialPos[1] ** 2 +
+    initialPos[2] ** 2,
   );
 
   // Position components (km) — estimated from current radius × initial direction
@@ -93,12 +94,13 @@ export default function TelemetryPanel({
   const positionKm = useMemo(() => {
     if (initialMag === 0) return { x: 0, y: 0, z: 0 };
     const scale = posRadiusKm / (initialMag / 1000);
+    const initialPos = params.satellites[0]?.initial_position ?? [0, 0, 0];
     return {
-      x: (params.initial_position[0] / 1000) * scale,
-      y: (params.initial_position[1] / 1000) * scale,
-      z: (params.initial_position[2] / 1000) * scale,
+      x: (initialPos[0] / 1000) * scale,
+      y: (initialPos[1] / 1000) * scale,
+      z: (initialPos[2] / 1000) * scale,
     };
-  }, [posRadiusKm, initialMag, params.initial_position]);
+  }, [posRadiusKm, initialMag, params.satellites]);
 
   // ── Velocity magnitude already computed by scene layer ────────
   // telemetry.velocityKmS = √(vx² + vy² + vz²) / 1000

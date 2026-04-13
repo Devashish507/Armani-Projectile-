@@ -19,7 +19,7 @@ import uuid
 import numpy as np
 from fastapi import APIRouter, HTTPException
 
-from models.orbit import OrbitRequest, OrbitResponse, SimulationMetadata, TransferRequest, TransferResponse
+from models.orbit import OrbitRequest, OrbitResponse, SatelliteTrajectory, SimulationMetadata, TransferRequest, TransferResponse
 from services.orbit.propagator import propagate_orbit
 from services.orbit.transfer import compute_hohmann_transfer, generate_transfer_trajectory
 
@@ -84,45 +84,53 @@ async def simulate_orbit(request: OrbitRequest) -> OrbitResponse:
     simulation_id = str(uuid.uuid4())
 
     try:
-        # Convert lists → NumPy arrays
-        r0 = np.array(request.initial_position, dtype=np.float64)
-        v0 = np.array(request.initial_velocity, dtype=np.float64)
-
-        # Offload CPU-bound propagation to a worker thread
-        result = await asyncio.to_thread(
-            propagate_orbit,
-            initial_position=r0,
-            initial_velocity=v0,
-            time_span=request.time_span,
-            time_step=request.time_step,
-        )
-
-        # ── Downsample for UI performance ───────────────────────────
-        time_out = result.time
-        pos_out = result.position
-        vel_out = result.velocity
-
-        if request.max_points is not None:
-            time_out, pos_out, vel_out = _downsample(
-                time_out, pos_out, vel_out, request.max_points,
-            )
-
-        # ── Build optional metadata ─────────────────────────────────
+        trajectories = []
         metadata = None
-        if request.include_metadata:
-            metadata = SimulationMetadata(
-                method=result.method,
-                energy_drift_pct=result.energy_drift_pct,
-                solver_evaluations=result.solver_evaluations,
-                n_steps=result.n_steps,
+
+        for sat in request.satellites:
+            # Convert lists → NumPy arrays
+            r0 = np.array(sat.initial_position, dtype=np.float64)
+            v0 = np.array(sat.initial_velocity, dtype=np.float64)
+
+            # Offload CPU-bound propagation to a worker thread
+            result = await asyncio.to_thread(
+                propagate_orbit,
+                initial_position=r0,
+                initial_velocity=v0,
+                time_span=request.time_span,
+                time_step=request.time_step,
             )
+
+            # ── Downsample for UI performance ───────────────────────────
+            time_out = result.time
+            pos_out = result.position
+            vel_out = result.velocity
+
+            if request.max_points is not None:
+                time_out, pos_out, vel_out = _downsample(
+                    time_out, pos_out, vel_out, request.max_points,
+                )
+
+            # ── Build optional metadata (just once for the first sat) ───
+            if metadata is None and request.include_metadata:
+                metadata = SimulationMetadata(
+                    method=result.method,
+                    energy_drift_pct=result.energy_drift_pct,
+                    solver_evaluations=result.solver_evaluations,
+                    n_steps=result.n_steps,
+                )
+
+            trajectories.append(SatelliteTrajectory(
+                id=sat.id,
+                time=time_out.tolist(),
+                position=pos_out.tolist(),
+                velocity=vel_out.tolist()
+            ))
 
         # ── Serialise NumPy → plain Python ──────────────────────────
         return OrbitResponse(
             simulation_id=simulation_id,
-            time=time_out.tolist(),
-            position=pos_out.tolist(),
-            velocity=vel_out.tolist(),
+            satellites=trajectories,
             metadata=metadata,
         )
 

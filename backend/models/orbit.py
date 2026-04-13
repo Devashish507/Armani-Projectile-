@@ -16,18 +16,37 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ── Request ─────────────────────────────────────────────────────────
 
+class SatelliteConfig(BaseModel):
+    """Configuration for a single satellite."""
+    id: str = Field(..., description="Unique string identifier for the satellite")
+    initial_position: list[float] = Field(
+        ...,
+        description="Cartesian position [x, y, z] in metres",
+        examples=[[7_000_000.0, 0.0, 0.0]],
+    )
+    initial_velocity: list[float] = Field(
+        ...,
+        description="Cartesian velocity [vx, vy, vz] in m/s",
+        examples=[[0.0, 7546.0, 0.0]],
+    )
+
+    @field_validator("initial_position", "initial_velocity")
+    @classmethod
+    def vector_must_be_3d(cls, v: list[float], info) -> list[float]:
+        if len(v) != 3:
+            raise ValueError(f"{info.field_name} must have exactly 3 elements, got {len(v)}")
+        return v
+
 
 class OrbitRequest(BaseModel):
-    """Input parameters for a two-body orbit simulation.
+    """Input parameters for a constellation simulation.
 
     All spatial values must be in **SI units** (metres, m/s, seconds).
 
     Attributes
     ----------
-    initial_position : list[float]
-        Cartesian position [x, y, z] in metres (length 3).
-    initial_velocity : list[float]
-        Cartesian velocity [vx, vy, vz] in m/s (length 3).
+    satellites : list[SatelliteConfig]
+        List of satellite initial conditions.
     time_span : float
         Total simulation duration in seconds.  Must be > 0.
     time_step : float
@@ -43,15 +62,9 @@ class OrbitRequest(BaseModel):
         the metadata envelope when it is not needed.
     """
 
-    initial_position: list[float] = Field(
+    satellites: list[SatelliteConfig] = Field(
         ...,
-        description="Cartesian position [x, y, z] in metres",
-        examples=[[7_000_000.0, 0.0, 0.0]],
-    )
-    initial_velocity: list[float] = Field(
-        ...,
-        description="Cartesian velocity [vx, vy, vz] in m/s",
-        examples=[[0.0, 7546.0, 0.0]],
+        description="List of satellites to simulate",
     )
     time_span: float = Field(
         ...,
@@ -76,26 +89,6 @@ class OrbitRequest(BaseModel):
         default=True,
         description="Include solver diagnostics in the response",
     )
-
-    # ── Element-count validators ────────────────────────────────────
-
-    @field_validator("initial_position")
-    @classmethod
-    def position_must_be_3d(cls, v: list[float]) -> list[float]:
-        if len(v) != 3:
-            raise ValueError(
-                f"initial_position must have exactly 3 elements, got {len(v)}"
-            )
-        return v
-
-    @field_validator("initial_velocity")
-    @classmethod
-    def velocity_must_be_3d(cls, v: list[float]) -> list[float]:
-        if len(v) != 3:
-            raise ValueError(
-                f"initial_velocity must have exactly 3 elements, got {len(v)}"
-            )
-        return v
 
     # ── Cross-field validator ───────────────────────────────────────
 
@@ -125,22 +118,23 @@ class SimulationMetadata(BaseModel):
     n_steps: int = Field(..., description="Number of output time steps")
 
 
+class SatelliteTrajectory(BaseModel):
+    """Trajectory for a single satellite."""
+    id: str = Field(..., description="Unique string identifier for the satellite")
+    time: list[float] = Field(..., description="Time stamps [s]")
+    position: list[list[float]] = Field(..., description="Position vectors [m] — (N, 3)")
+    velocity: list[list[float]] = Field(..., description="Velocity vectors [m/s] — (N, 3)")
+
+
 class OrbitResponse(BaseModel):
     """Computed trajectory returned by the simulation endpoint.
-
-    Arrays are row-per-epoch: ``position[i]`` is the [x, y, z] at ``time[i]``.
 
     Attributes
     ----------
     simulation_id : str
-        Unique identifier for this simulation run (UUID4).  Useful for
-        caching results and saving missions.
-    time : list[float]
-        Epoch values in seconds from simulation start.
-    position : list[list[float]]
-        Position vectors [m] at each epoch — shape (N, 3).
-    velocity : list[list[float]]
-        Velocity vectors [m/s] at each epoch — shape (N, 3).
+        Unique identifier for this simulation run (UUID4).
+    satellites : list[SatelliteTrajectory]
+        Trajectories grouped by satellite.
     metadata : SimulationMetadata | None
         Solver diagnostics.  ``None`` when ``include_metadata=false``.
     """
@@ -148,12 +142,8 @@ class OrbitResponse(BaseModel):
     simulation_id: str = Field(
         ..., description="Unique simulation run identifier (UUID4)"
     )
-    time: list[float] = Field(..., description="Time stamps [s]")
-    position: list[list[float]] = Field(
-        ..., description="Position vectors [m] — (N, 3)"
-    )
-    velocity: list[list[float]] = Field(
-        ..., description="Velocity vectors [m/s] — (N, 3)"
+    satellites: list[SatelliteTrajectory] = Field(
+        ..., description="List of individual satellite trajectories"
     )
     metadata: Optional[SimulationMetadata] = Field(
         default=None,
@@ -168,14 +158,11 @@ class WsOrbitParams(BaseModel):
     """Orbit parameters received over the WebSocket channel.
 
     Mirrors the core fields of :class:`OrbitRequest` without the REST-only
-    options (``max_points``, ``include_metadata``).
+    options.
     """
 
-    initial_position: list[float] = Field(
-        ..., description="Cartesian position [x, y, z] in metres",
-    )
-    initial_velocity: list[float] = Field(
-        ..., description="Cartesian velocity [vx, vy, vz] in m/s",
+    satellites: list[SatelliteConfig] = Field(
+        ..., description="List of satellites to simulate",
     )
     time_span: float = Field(..., gt=0, description="Total simulation time in seconds")
     time_step: float = Field(..., gt=0, description="Output time step in seconds")
@@ -185,24 +172,6 @@ class WsOrbitParams(BaseModel):
         description="Resume streaming from this simulation time (seconds). "
                     "Frames before this timestamp are skipped.",
     )
-
-    @field_validator("initial_position")
-    @classmethod
-    def position_must_be_3d(cls, v: list[float]) -> list[float]:
-        if len(v) != 3:
-            raise ValueError(
-                f"initial_position must have exactly 3 elements, got {len(v)}"
-            )
-        return v
-
-    @field_validator("initial_velocity")
-    @classmethod
-    def velocity_must_be_3d(cls, v: list[float]) -> list[float]:
-        if len(v) != 3:
-            raise ValueError(
-                f"initial_velocity must have exactly 3 elements, got {len(v)}"
-            )
-        return v
 
     @model_validator(mode="after")
     def step_must_not_exceed_span(self) -> WsOrbitParams:

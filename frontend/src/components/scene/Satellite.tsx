@@ -2,6 +2,7 @@
 
 import { useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
+import { Html } from "@react-three/drei";
 import * as THREE from "three";
 
 /* ────────────────────────────────────────────────────────────────
@@ -28,6 +29,8 @@ interface SatelliteProps {
   panelColor?: string;
   /** Whether the satellite is visible. @default true */
   visible?: boolean;
+  /** Optional text label overlay. */
+  label?: string;
 }
 
 export default function Satellite({
@@ -37,6 +40,7 @@ export default function Satellite({
   emissiveColor = "#ffd54f",
   panelColor = "#1a237e",
   visible = true,
+  label,
 }: SatelliteProps) {
   const groupRef = useRef<THREE.Group>(null);
   const bodyMatRef = useRef<THREE.MeshStandardMaterial>(null);
@@ -102,6 +106,19 @@ export default function Satellite({
 
   return (
     <group position={position} visible={visible}>
+      {label && (
+        <Html
+          position={[0, size * 3, 0]}
+          center
+          distanceFactor={10}
+          zIndexRange={[100, 0]}
+          style={{ pointerEvents: "none" }}
+        >
+          <div className="px-1 py-0.5 rounded bg-black/70 border border-cyan-500/20 text-white shadow-lg text-[4px] font-mono tracking-wider whitespace-nowrap uppercase">
+            {label}
+          </div>
+        </Html>
+      )}
       <group ref={groupRef}>
         {/* ── Satellite body (central sphere) ───────────── */}
         <mesh>

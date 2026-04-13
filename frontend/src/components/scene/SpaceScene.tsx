@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState, useCallback, useRef } from "react";
+import { Suspense, useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { Canvas } from "@react-three/fiber";
 import { Stars, Preload } from "@react-three/drei";
 import { ACESFilmicToneMapping } from "three";
@@ -59,15 +59,18 @@ function generateMockOrbit(
  * ──────────────────────────────────────────────────────────────── */
 
 function scaleTrajectory(data: OrbitSimulationResponse): ScaledTrajectory {
+  const sat = data.satellites[0];
+  if (!sat) return { times: [], positions: [], velocities: [] };
+  
   return {
-    times: data.time,
-    positions: data.position.map(
-      ([x, y, z]) =>
-        [x / SCALE_FACTOR, y / SCALE_FACTOR, z / SCALE_FACTOR] as [number, number, number],
+    times: sat.time,
+    positions: sat.position.map(
+      (([x, y, z]: number[]) => 
+        [x / SCALE_FACTOR, y / SCALE_FACTOR, z / SCALE_FACTOR] as [number, number, number]) as any
     ),
-    velocities: data.velocity.map(
-      ([vx, vy, vz]) =>
-        [vx / SCALE_FACTOR, vy / SCALE_FACTOR, vz / SCALE_FACTOR] as [number, number, number],
+    velocities: sat.velocity.map(
+      (([vx, vy, vz]: number[]) =>
+        [vx / SCALE_FACTOR, vy / SCALE_FACTOR, vz / SCALE_FACTOR] as [number, number, number]) as any
     ),
   };
 }
@@ -76,17 +79,23 @@ import { useOrbitWebSocket } from "@/hooks/useOrbitWebSocket";
 
 // ── Configuration ─────────────────────────────────────────────────
 
+import type { SatelliteConfig } from "@/types/orbit";
+
 export interface OrbitParams {
-  initial_position: [number, number, number];
-  initial_velocity: [number, number, number];
+  satellites: SatelliteConfig[];
   time_span: number;
   time_step: number;
 }
 
 /** Default ISS-like LEO orbit used when no params are supplied. */
 const DEFAULT_ORBIT_PARAMS: OrbitParams = {
-  initial_position: [7_000_000, 0, 0],
-  initial_velocity: [0, 7546, 0],
+  satellites: [
+    {
+      id: "sat-1",
+      initial_position: [7_000_000, 0, 0],
+      initial_velocity: [0, 7546, 0],
+    }
+  ],
   time_span: 5400,
   time_step: 10,
 };
@@ -115,6 +124,8 @@ interface OrbitLayerProps {
   onConnectionChange?: (state: WsConnectionState) => void;
   /** Callback to wire diagnostics ref */
   onDiagnosticsReady?: (ref: React.RefObject<ConnectionDiagnostics>) => void;
+  /** Array of satellite IDs to hide. */
+  hiddenSatellites?: string[];
   /** Orbit line colour. @default "#00e5ff" */
   orbitColor?: string;
 }
@@ -128,6 +139,7 @@ function OrbitLayer({
   onPositionUpdate,
   onConnectionChange,
   onDiagnosticsReady,
+  hiddenSatellites = [],
   orbitColor = "#00e5ff",
 }: OrbitLayerProps) {
   // ── WebSocket streaming ──────────────────────────────────────────
@@ -204,7 +216,7 @@ function OrbitLayer({
   if (
     ws.connectionState === "idle" ||
     ws.connectionState === "connecting" ||
-    ws.trajectoryRef.current.length === 0
+    ws.satellitesRef.current.size === 0
   ) {
     return null;
   }
@@ -216,6 +228,7 @@ function OrbitLayer({
       orbitColor={orbitColor}
       onTelemetryUpdate={onTelemetryUpdate}
       onPositionUpdate={onPositionUpdate}
+      hiddenSatellites={hiddenSatellites}
     />
   );
 }
@@ -232,6 +245,7 @@ interface StreamedOrbitProps {
   orbitColor: string;
   onTelemetryUpdate?: (params: OrbitalParameters) => void;
   onPositionUpdate?: (pos: [number, number, number]) => void;
+  hiddenSatellites?: string[];
 }
 
 function StreamedOrbit({
@@ -240,7 +254,89 @@ function StreamedOrbit({
   orbitColor,
   onTelemetryUpdate,
   onPositionUpdate,
+  hiddenSatellites = [],
 }: StreamedOrbitProps) {
+  
+  // Extract unique planes for rendering
+  const planes = useMemo(() => {
+    const uniquePlanes = new Map();
+    orbitParams.satellites.forEach(sat => {
+      if (sat.metadata) {
+        if (!uniquePlanes.has(sat.metadata.planeIndex)) {
+          uniquePlanes.set(sat.metadata.planeIndex, {
+            ...sat.metadata,
+            color: `hsl(${(sat.metadata.planeIndex * 137) % 360}, 100%, 50%)`
+          });
+        }
+      }
+    });
+    return Array.from(uniquePlanes.values());
+  }, [orbitParams.satellites]);
+
+  return (
+    <>
+      {/* Dynamic Plane Visualizations */}
+      {planes.map((p: any) => (
+        <OrbitPlane 
+          key={`plane-${p.planeIndex}`}
+          orbitRadius={p.radius}
+          inclinationDeg={(p.inclination * 180) / Math.PI}
+          raan={p.raan}
+          color={p.color}
+          opacity={0.3}
+          visible={true}
+        />
+      ))}
+      
+      {/* Fallback Single Plane if no metadata exists */}
+      {planes.length === 0 && <OrbitPlane orbitRadius={1.063} />}
+
+      {/* Satellites */}
+      {orbitParams.satellites
+        .filter((sat) => !hiddenSatellites.includes(sat.id))
+        .map((sat, index) => {
+          const isFirst = index === 0;
+          const pColor = sat.metadata 
+            ? `hsl(${(sat.metadata.planeIndex * 137) % 360}, 100%, 50%)`
+            : (isFirst ? orbitColor : `hsl(${(index * 137) % 360}, 100%, 50%)`);
+            
+          return (
+            <StreamedSatellite 
+              key={sat.id} 
+              satId={sat.id}
+              label={sat.id}
+              planeColor={pColor}
+              ws={ws} 
+              orbitParams={orbitParams} 
+              orbitColor={pColor} 
+              onTelemetryUpdate={isFirst ? onTelemetryUpdate : undefined}
+              onPositionUpdate={isFirst ? onPositionUpdate : undefined}
+            />
+          );
+      })}
+    </>
+  );
+}
+
+function StreamedSatellite({
+  satId,
+  label,
+  planeColor,
+  ws,
+  orbitParams,
+  orbitColor,
+  onTelemetryUpdate,
+  onPositionUpdate,
+}: {
+  satId: string;
+  label?: string;
+  planeColor?: string;
+  ws: ReturnType<typeof useOrbitWebSocket>;
+  orbitParams: OrbitParams;
+  orbitColor: string;
+  onTelemetryUpdate?: (params: OrbitalParameters) => void;
+  onPositionUpdate?: (pos: [number, number, number]) => void;
+}) {
   const telemetryRef = useRef(onTelemetryUpdate);
   const posUpdateRef = useRef(onPositionUpdate);
 
@@ -249,22 +345,30 @@ function StreamedOrbit({
     posUpdateRef.current = onPositionUpdate;
   }, [onTelemetryUpdate, onPositionUpdate]);
 
-  // We wrap the satellite in a group we control directly via ref.
-  // This completely eliminates React re-renders during playback!
   const wrapperRef = useRef<THREE.Group>(null);
-
-  // Time-delayed playback buffer (e.g. 150ms delay)
+  const pathRef = useRef<any>(null);
   const currentSimTimeRef = useRef(-1);
+  const [positions, setPositions] = useState<[number, number, number][]>([]);
+
+  // Periodically update the path so we don't re-render 60fps, maybe 5fps
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const state = ws.satellitesRef.current.get(satId);
+      if (state && state.trajectory.length !== positions.length) {
+        setPositions([...state.trajectory]);
+      }
+    }, 200);
+    return () => clearInterval(interval);
+  }, [ws, satId, positions.length]);
 
   useFrame((_state, delta) => {
-    const buffer = ws.bufferRef.current;
+    const satState = ws.satellitesRef.current.get(satId);
+    if (!satState) return;
+    const buffer = satState.buffer;
     if (buffer.length === 0) return;
 
-    // Adaptive Latency: Base 150ms real-time delay + 1.5x EWMA network latency
     const latencyDelayMs = Math.max(150, ws.avgLatencyRef.current * 1.5);
-    
-    // Server ticked every 50ms providing 'time_step' simulation units
-    const SIM_SPEED = orbitParams.time_step / (50 / 1000); // typically 200x
+    const SIM_SPEED = orbitParams.time_step / (50 / 1000); 
     const latencyDelaySim = (latencyDelayMs / 1000) * SIM_SPEED;
 
     const latestServerTime = buffer[buffer.length - 1].serverTime;
@@ -274,7 +378,6 @@ function StreamedOrbit({
       currentSimTimeRef.current = targetSimTime;
     }
 
-    // Advance playback head synchronized to Server Time + spring elasticity to prevent long-term drift
     const timeSpring = (targetSimTime - currentSimTimeRef.current) * 2.0;
     currentSimTimeRef.current += (delta * SIM_SPEED) + (timeSpring * delta);
 
@@ -303,8 +406,6 @@ function StreamedOrbit({
       t = (rTime - frame0.serverTime) / dt;
     }
 
-    // Hermite interpolation using velocity for trajectory-aware prediction (#7)
-    // h(t) = (2t³ - 3t² + 1)p0 + (t³ - 2t² + t)m0 + (-2t³ + 3t² )p1 + (t³ - t²)m1
     const t2 = t * t;
     const t3 = t2 * t;
     const h00 = 2 * t3 - 3 * t2 + 1;
@@ -312,7 +413,6 @@ function StreamedOrbit({
     const h01 = -2 * t3 + 3 * t2;
     const h11 = t3 - t2;
 
-    // Scale velocity tangents by the time interval for proper Hermite form
     const x = h00 * frame0.position[0] + h10 * frame0.velocity[0] * dt
             + h01 * frame1.position[0] + h11 * frame1.velocity[0] * dt;
     const y = h00 * frame0.position[1] + h10 * frame0.velocity[1] * dt
@@ -320,7 +420,6 @@ function StreamedOrbit({
     const z = h00 * frame0.position[2] + h10 * frame0.velocity[2] * dt
             + h01 * frame1.position[2] + h11 * frame1.velocity[2] * dt;
 
-    // Apply native mutation to bypass React rendering costs
     if (wrapperRef.current) {
       wrapperRef.current.position.set(x, y, z);
     }
@@ -333,13 +432,11 @@ function StreamedOrbit({
       const dist = Math.sqrt(x ** 2 + y ** 2 + z ** 2);
       const altitudeKm = (dist - 1) * 6371;
 
-      // Interpolate velocity
       const vx = frame0.velocity[0] + (frame1.velocity[0] - frame0.velocity[0]) * t;
       const vy = frame0.velocity[1] + (frame1.velocity[1] - frame0.velocity[1]) * t;
       const vz = frame0.velocity[2] + (frame1.velocity[2] - frame0.velocity[2]) * t;
       const velocityKmS = Math.sqrt(vx ** 2 + vy ** 2 + vz ** 2) * 6371;
 
-      // Interpolate progress/step
       const currentStep = frame0.step + (frame1.step - frame0.step) * t;
       const progress =
         ws.totalStepsRef.current > 0
@@ -349,32 +446,25 @@ function StreamedOrbit({
       telemetryRef.current({
         altitudeKm: Math.max(0, altitudeKm),
         velocityKmS: Math.abs(velocityKmS),
-        inclinationDeg: 51.6, // Derived from initial conditions
+        inclinationDeg: 51.6,
         periodMin: orbitParams.time_span / 60,
         progress,
       });
     }
   });
 
-  const positions = ws.trajectoryRef.current;
-  const orbitRadius =
-    positions.length > 0
-      ? Math.sqrt(
-          positions[0][0] ** 2 + positions[0][1] ** 2 + positions[0][2] ** 2,
-        )
-      : 1.063;
-
   return (
     <>
-      <OrbitPath
-        positions={positions}
-        currentIndex={positions.length - 1} // draw the whole growing line
-        color={orbitColor}
-      />
+      {positions.length > 0 && (
+        <OrbitPath
+          positions={positions}
+          currentIndex={positions.length - 1}
+          color={orbitColor}
+        />
+      )}
       <group ref={wrapperRef}>
-        <Satellite position={[0, 0, 0]} />
+        <Satellite position={[0, 0, 0]} color={orbitColor} />
       </group>
-      <OrbitPlane orbitRadius={orbitRadius} />
     </>
   );
 }
@@ -465,6 +555,8 @@ interface SpaceSceneProps {
   onPositionUpdate?: (pos: [number, number, number]) => void;
   /** Callback to wire diagnostics ref from WS hook to the dashboard. */
   onDiagnosticsReady?: (ref: React.RefObject<ConnectionDiagnostics>) => void;
+  /** Array of satellite IDs that should be hidden from view. */
+  hiddenSatellites?: string[];
 }
 
 export default function SpaceScene({
@@ -476,6 +568,7 @@ export default function SpaceScene({
   onConnectionChange,
   onPositionUpdate,
   onDiagnosticsReady,
+  hiddenSatellites = [],
 }: SpaceSceneProps) {
   // Store satellite position for camera follow
   const [satPos, setSatPos] = useState<[number, number, number]>([0, 0, 0]);
@@ -526,6 +619,7 @@ export default function SpaceScene({
           onConnectionChange={onConnectionChange}
           onPositionUpdate={handlePositionUpdate}
           onDiagnosticsReady={onDiagnosticsReady}
+          hiddenSatellites={hiddenSatellites}
         />
         <Stars
           radius={100}

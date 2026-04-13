@@ -15,9 +15,11 @@ interface OrbitPlaneProps {
   orbitRadius?: number;
   /** Orbital inclination in degrees. @default 51.6 */
   inclinationDeg?: number;
+  /** RAAN in radians. @default 0 */
+  raan?: number;
   /** Ring colour. @default "#00e5ff" */
   color?: string;
-  /** Ring opacity. @default 0.04 */
+  /** Ring opacity. @default 0.15 */
   opacity?: number;
   /** Whether the plane is visible. @default true */
   visible?: boolean;
@@ -26,8 +28,9 @@ interface OrbitPlaneProps {
 export default function OrbitPlane({
   orbitRadius = 1.063,
   inclinationDeg = 51.6,
+  raan = 0,
   color = "#00e5ff",
-  opacity = 0.04,
+  opacity = 0.15,
   visible = true,
 }: OrbitPlaneProps) {
   // Convert inclination to radians — rotate about X axis
@@ -38,10 +41,10 @@ export default function OrbitPlane({
 
   return (
     <mesh
-      rotation={[inclination, 0, 0]}
+      rotation={[inclination, raan, 0]}
       visible={visible}
     >
-      <ringGeometry args={[orbitRadius * 0.3, orbitRadius * 1.05, 128]} />
+      <ringGeometry args={[orbitRadius - 0.005, orbitRadius + 0.005, 128]} />
       <meshBasicMaterial
         color={color}
         transparent
