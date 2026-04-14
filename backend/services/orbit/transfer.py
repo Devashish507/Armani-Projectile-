@@ -34,6 +34,11 @@ def compute_hohmann_transfer(r1: float, r2: float, mu: float = MU_EARTH) -> dict
     dict
         Contains delta_v1, delta_v2, total_delta_v, and transfer_time.
     """
+    if r1 <= 0 or r2 <= 0:
+        raise ValueError("Radii must be strictly positive")
+    if r1 == r2:
+        raise ValueError("Cannot transition between identical orbits")
+
     # Circular orbit velocities
     v1 = np.sqrt(mu / r1)
     v2 = np.sqrt(mu / r2)

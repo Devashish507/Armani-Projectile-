@@ -18,6 +18,9 @@ export const metadata: Metadata = {
     "Mission design, simulation, and monitoring platform for aerospace operations.",
 };
 
+import { Toaster } from "@/components/ui/sonner";
+import { Header } from "@/components/layout/Header";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -28,7 +31,13 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col font-sans">
+        <Header />
+        <main className="flex-1 flex flex-col overflow-hidden relative">
+          {children}
+        </main>
+        <Toaster theme="dark" position="bottom-right" />
+      </body>
     </html>
   );
 }

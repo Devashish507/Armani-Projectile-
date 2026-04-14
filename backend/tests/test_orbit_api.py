@@ -34,8 +34,13 @@ client = TestClient(app)
 # ── Fixtures ────────────────────────────────────────────────────────
 
 VALID_PAYLOAD: dict = {
-    "initial_position": [7_000_000.0, 0.0, 0.0],
-    "initial_velocity": [0.0, 7546.0, 0.0],
+    "satellites": [
+        {
+            "id": "sat-1",
+            "initial_position": [7_000_000.0, 0.0, 0.0],
+            "initial_velocity": [0.0, 7546.0, 0.0],
+        }
+    ],
     "time_span": 5400,
     "time_step": 10,
 }
@@ -56,19 +61,18 @@ class TestSimulateSuccess:
 
         # Top-level keys
         assert "simulation_id" in data
-        assert "time" in data
-        assert "position" in data
-        assert "velocity" in data
+        assert "satellites" in data
         assert "metadata" in data
 
         # Default max_points=500 → output capped at 500
-        assert len(data["time"]) <= 500
-        assert len(data["position"]) == len(data["time"])
-        assert len(data["velocity"]) == len(data["time"])
+        sat1 = data["satellites"][0]
+        assert len(sat1["time"]) <= 500
+        assert len(sat1["position"]) == len(sat1["time"])
+        assert len(sat1["velocity"]) == len(sat1["time"])
 
         # Each position/velocity vector must be length 3
-        assert len(data["position"][0]) == 3
-        assert len(data["velocity"][0]) == 3
+        assert len(sat1["position"][0]) == 3
+        assert len(sat1["velocity"][0]) == 3
 
         # Metadata fields present (include_metadata defaults to true)
         meta = data["metadata"]
@@ -108,15 +112,15 @@ class TestDownsampling:
         """Default max_points=500 caps a 541-point orbit."""
         resp = client.post("/api/v1/orbit/simulate", json=VALID_PAYLOAD)
         data = resp.json()
-        assert len(data["time"]) == 500
+        assert len(data["satellites"][0]["time"]) == 500
 
     def test_custom_max_points(self) -> None:
         """Explicit max_points=100 reduces output to 100 points."""
         payload = {**VALID_PAYLOAD, "max_points": 100}
         resp = client.post("/api/v1/orbit/simulate", json=payload)
         data = resp.json()
-        assert len(data["time"]) == 100
-        assert len(data["position"]) == 100
+        assert len(data["satellites"][0]["time"]) == 100
+        assert len(data["satellites"][0]["position"]) == 100
 
     def test_null_disables_downsampling(self) -> None:
         """max_points=null returns full resolution."""
@@ -124,7 +128,7 @@ class TestDownsampling:
         resp = client.post("/api/v1/orbit/simulate", json=payload)
         data = resp.json()
         expected_steps = int(VALID_PAYLOAD["time_span"] / VALID_PAYLOAD["time_step"]) + 1
-        assert len(data["time"]) == expected_steps
+        assert len(data["satellites"][0]["time"]) == expected_steps
 
     def test_max_points_larger_than_output(self) -> None:
         """When max_points exceeds actual points, no downsampling occurs."""
@@ -132,15 +136,15 @@ class TestDownsampling:
         resp = client.post("/api/v1/orbit/simulate", json=payload)
         data = resp.json()
         expected_steps = int(VALID_PAYLOAD["time_span"] / VALID_PAYLOAD["time_step"]) + 1
-        assert len(data["time"]) == expected_steps
+        assert len(data["satellites"][0]["time"]) == expected_steps
 
     def test_first_and_last_preserved(self) -> None:
         """Downsampled output still starts at t=0 and ends at t=time_span."""
         payload = {**VALID_PAYLOAD, "max_points": 50}
         resp = client.post("/api/v1/orbit/simulate", json=payload)
         data = resp.json()
-        assert data["time"][0] == 0.0
-        assert data["time"][-1] == pytest.approx(VALID_PAYLOAD["time_span"])
+        assert data["satellites"][0]["time"][0] == 0.0
+        assert data["satellites"][0]["time"][-1] == pytest.approx(VALID_PAYLOAD["time_span"])
 
     def test_invalid_max_points_zero(self) -> None:
         """max_points=0 returns 422."""
@@ -177,8 +181,13 @@ class TestPydanticValidation:
     def test_missing_field(self) -> None:
         """Omitting a required field returns 422."""
         payload = {
-            "initial_position": [7_000_000.0, 0.0, 0.0],
-            # initial_velocity missing
+            "satellites": [
+                {
+                    "id": "sat-1",
+                    "initial_position": [7_000_000.0, 0.0, 0.0],
+                    # initial_velocity missing
+                }
+            ],
             "time_span": 5400,
             "time_step": 10,
         }
@@ -187,13 +196,15 @@ class TestPydanticValidation:
 
     def test_position_wrong_length(self) -> None:
         """Position with != 3 elements returns 422."""
-        payload = {**VALID_PAYLOAD, "initial_position": [7_000_000.0, 0.0]}
+        payload = {**VALID_PAYLOAD}
+        payload["satellites"][0]["initial_position"] = [7_000_000.0, 0.0]
         resp = client.post("/api/v1/orbit/simulate", json=payload)
         assert resp.status_code == 422
 
     def test_velocity_wrong_length(self) -> None:
         """Velocity with != 3 elements returns 422."""
-        payload = {**VALID_PAYLOAD, "initial_velocity": [0.0, 7546.0, 0.0, 0.0]}
+        payload = {**VALID_PAYLOAD}
+        payload["satellites"][0]["initial_velocity"] = [0.0, 7546.0, 0.0, 0.0]
         resp = client.post("/api/v1/orbit/simulate", json=payload)
         assert resp.status_code == 422
 
@@ -225,8 +236,13 @@ class TestEngineValidation:
     def test_position_in_kilometres(self) -> None:
         """Position in km (not m) triggers the StateVector guard → 400."""
         payload = {
-            "initial_position": [7000.0, 0.0, 0.0],   # km — should be m!
-            "initial_velocity": [0.0, 7546.0, 0.0],
+            "satellites": [
+                {
+                    "id": "sat-1",
+                    "initial_position": [7000.0, 0.0, 0.0],   # km — should be m!
+                    "initial_velocity": [0.0, 7546.0, 0.0],
+                }
+            ],
             "time_span": 100,
             "time_step": 10,
         }
