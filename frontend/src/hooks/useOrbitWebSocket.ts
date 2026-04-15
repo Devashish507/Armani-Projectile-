@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useCallback, useState } from "react";
+import { toast } from "sonner";
 import type {
   WsConnectionState,
   OrbitSimulationRequest,
@@ -194,6 +195,7 @@ export function useOrbitWebSocket({
 
         if (msg.type === "error") {
           console.error("[useOrbitWebSocket] Server error:", msg.detail);
+          toast.error("Simulation Error", { description: msg.detail });
           setConnectionState("error");
           return;
         }
@@ -210,6 +212,7 @@ export function useOrbitWebSocket({
         if (msg.type === "simulation_complete") {
           setConnectionState("complete");
           if (watchdogRef.current) clearTimeout(watchdogRef.current);
+          toast.success("Simulation Complete", { description: "All trajectories delivered." });
           return;
         }
 
@@ -299,6 +302,7 @@ export function useOrbitWebSocket({
     };
 
     ws.onerror = () => {
+      toast.error("WebSocket Error", { description: "Connection telemetry interrupted." });
       setConnectionState("error");
     };
 
@@ -311,9 +315,17 @@ export function useOrbitWebSocket({
       );
 
       if (reconnectAttemptsRef.current < 5) {
+        if (reconnectAttemptsRef.current === 0) {
+          toast.warning("Connection Lost", { description: "Attempting to reconnect..." });
+        }
         const delay = Math.pow(2, reconnectAttemptsRef.current) * 1000;
         reconnectTimeoutRef.current = window.setTimeout(connect, delay) as unknown as number;
         reconnectAttemptsRef.current++;
+      } else {
+        if (reconnectAttemptsRef.current === 5) {
+          toast.error("Reconnection Failed", { description: "Max attempts reached." });
+          reconnectAttemptsRef.current++; // Prevent further toasts
+        }
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps

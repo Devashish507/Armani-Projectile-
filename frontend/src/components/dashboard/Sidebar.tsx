@@ -150,8 +150,11 @@ export default function Sidebar() {
     setErrors({});
   }, []);
 
-  const handleApplyPreset = useCallback((type: "starlink" | "galileo") => {
+  const handleApplyPreset = useCallback((type: "starlink" | "single_leo" | "gto_transfer") => {
     let sats;
+    let t_span = 5400;
+    let t_step = 10;
+
     if (type === "starlink") {
       sats = generateWalkerDelta({
         altitudeKm: 550,
@@ -160,22 +163,31 @@ export default function Sidebar() {
         p: 3,
         f: 1
       }, "starlink");
+      t_span = 5400; // 90 mins
+      t_step = 10;
+    } else if (type === "gto_transfer") {
+      sats = [{
+        id: "GTO-Transfer-1",
+        initial_position: [7_000_000.0, 0.0, 0.0],
+        initial_velocity: [0.0, 9882.0, 0.0], // Burn 1 velocity for LEO->GEO
+      }];
+      t_span = 40000; // ~11 hours to cover the full heavily elliptical orbit
+      t_step = 40;
     } else {
-      sats = generateWalkerDelta({
-        altitudeKm: 23222,
-        inclinationDeg: 56.0,
-        t: 24,
-        p: 3,
-        f: 1
-      }, "galileo");
+      sats = [{
+        id: "LEO-1",
+        initial_position: [7_000_000.0, 0.0, 0.0],
+        initial_velocity: [0.0, 7546.0, 0.0],
+      }];
+      t_span = 5400;
+      t_step = 10;
     }
 
     setForm((prev) => ({
       ...prev,
       satellites: sats,
-      // Increase time span for Galileo since its period is 14 hours
-      time_span: type === "galileo" ? 50400 : 5400,
-      time_step: type === "galileo" ? 100 : 10,
+      time_span: t_span,
+      time_step: t_step,
     }));
     setErrors({});
   }, []);
@@ -283,28 +295,38 @@ export default function Sidebar() {
           </Button>
         </FieldGroup>
         
-        {/* ── Constellation Presets ──────────────────────────────── */}
-        <FieldGroup icon={<MapPin className="w-3.5 h-3.5" />} label="Quick Presets">
+        {/* ── Demo Scenarios ──────────────────────────────────────── */}
+        <FieldGroup icon={<Rocket className="w-3.5 h-3.5" />} label="Demo Scenarios">
           <div className="flex flex-col gap-2">
             <Button
               variant="outline"
               size="sm"
-              onClick={() => handleApplyPreset("starlink")}
-              className="bg-white/[0.04] border-white/[0.08] text-white/70 hover:text-white
-                         font-mono text-[10px] tracking-wider justify-between h-8"
+              onClick={() => handleApplyPreset("single_leo")}
+              className="bg-white/[0.04] border-white/[0.08] text-white/70 hover:text-white hover:border-cyan-500/30
+                         font-mono text-[10px] tracking-wider justify-between h-9 px-3"
             >
-              LEO Shell
-              <span className="text-white/30 text-[9px]">72 Sats</span>
+              Single LEO
+              <span className="text-white/30 text-[9px] uppercase">1 Sat • 90m</span>
             </Button>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => handleApplyPreset("galileo")}
-              className="bg-white/[0.04] border-white/[0.08] text-white/70 hover:text-white
-                         font-mono text-[10px] tracking-wider justify-between h-8"
+              onClick={() => handleApplyPreset("gto_transfer")}
+              className="bg-white/[0.04] border-white/[0.08] text-white/70 hover:text-white hover:border-blue-500/30
+                         font-mono text-[10px] tracking-wider justify-between h-9 px-3"
             >
-              MEO Params
-              <span className="text-white/30 text-[9px]">24 Sats</span>
+              GTO Transfer Orbit
+              <span className="text-white/30 text-[9px] uppercase">Highly Elliptical</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleApplyPreset("starlink")}
+              className="bg-white/[0.04] border-white/[0.08] text-white/70 hover:text-white hover:border-purple-500/30
+                         font-mono text-[10px] tracking-wider justify-between h-9 px-3"
+            >
+              LEO Constellation
+              <span className="text-white/30 text-[9px] uppercase">72 Sats • Global</span>
             </Button>
           </div>
         </FieldGroup>

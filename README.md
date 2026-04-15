@@ -29,10 +29,19 @@ Armani/
 | Tool    | Version |
 |---------|---------|
 | Python  | 3.11+   |
-| Node.js | 18+     |
-| npm     | 9+      |
+| Node.js | 20+     |
+| Docker  | 24+     |
 
-### 1. Backend (port 8000)
+### 🚀 Recommended: Docker Compose
+The system is fully containerized for a one-click production-ready deployment.
+```bash
+docker-compose up --build -d
+```
+The application will be available at [http://localhost:3000](http://localhost:3000) and the backend API at `localhost:8000`.
+
+### Local Development
+
+#### 1. Backend (port 8000)
 
 ```bash
 cd backend
@@ -42,15 +51,15 @@ uvicorn main:app --reload --port 8000
 
 Verify: `curl http://localhost:8000/health` → `{"status":"ok"}`
 
-### 2. Frontend (port 3000)
+#### 2. Frontend (port 3000)
 
 ```bash
 cd frontend
-npm install        # first time only
+npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The status indicator connects to the backend `/health` endpoint.
+Open [http://localhost:3000](http://localhost:3000).
 
 ## Key Design Decisions
 
